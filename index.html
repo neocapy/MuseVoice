@@ -9,12 +9,25 @@
   </head>
 
   <body>
-    <main class="container">
-      <h1>MuseVoice</h1>
-      <p>
-        MuseVoice is a tool that helps you create music.
-      </p>
-      <button>Get Started</button>
-    </main>
+    <div class="app-container" data-tauri-drag-region>
+      <!-- Left Sidebar -->
+      <div class="sidebar">
+        <div class="sidebar-content">
+          <canvas id="status-canvas" width="48" height="48"></canvas>
+          <label id="status-label" class="status-label">Loading</label>
+        </div>
+        <button id="close-btn" class="close-btn" title="Close">✕</button>
+      </div>
+      
+      <!-- Right Content Area -->
+      <div class="content-area">
+        <textarea 
+          id="transcription-text" 
+          class="transcription-textbox" 
+          placeholder="Transcribed text will appear here..."
+          spellcheck="false"
+        ></textarea>
+      </div>
+    </div>
   </body>
 </html>

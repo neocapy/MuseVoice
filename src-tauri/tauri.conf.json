@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "muse",
+  "productName": "MuseVoice",
   "version": "0.1.0",
-  "identifier": "com.muse.app",
+  "identifier": "com.musevoice.app",
   "build": {
     "beforeDevCommand": "yarn dev",
     "devUrl": "http://localhost:1420",
@@ -13,9 +13,17 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "muse",
-        "width": 800,
-        "height": 600
+        "title": "MuseVoice",
+        "width": 320,
+        "height": 600,
+        "minWidth": 48,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "resizable": true,
+        "transparent": false,
+        "center": false,
+        "x": 100,
+        "y": 100
       }
     ],
     "security": {

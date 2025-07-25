@@ -1,3 +1,11 @@
+/* Import Outfit font */
+@font-face {
+  font-family: 'Outfit';
+  src: url('./Outfit-VariableFont_wght.ttf') format('truetype');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -5,17 +13,180 @@
 }
 
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
+  /* Color Theme */
+  --bg-primary: #f8f6ff;        /* Light lavender */
+  --bg-secondary: #e8e4f3;      /* Slightly darker lavender for sidebar */
+  --text-primary: #1a1a1a;      /* Near black */
+  --text-secondary: #4a4a4a;    /* Gray */
+  --accent: #6366f1;            /* Vibrant blue-purple */
+  --accent-hover: #5048e5;      /* Darker accent for hover */
+  --border: #d1d5db;            /* Light border */
+  
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  user-select: none;
+}
+
+.app-container {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+  background-color: var(--bg-primary);
+}
+
+/* Left Sidebar */
+.sidebar {
+  width: 48px;
+  min-width: 48px;
+  background-color: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  position: relative;
+  border-right: 1px solid var(--border);
+}
+
+.sidebar-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+#status-canvas {
+  background-color: var(--bg-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+}
+
+#status-canvas:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.3);
+}
+
+.status-label {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  text-align: center;
+  line-height: 1.2;
+  max-width: 44px;
+  word-wrap: break-word;
+  font-family: 'Outfit', sans-serif;
+}
+
+.close-btn {
+  position: absolute;
+  bottom: 4px;
+  right: 50%;
+  transform: translateX(50%);
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 2px;
+  transition: all 0.2s ease;
+  font-family: 'Outfit', sans-serif;
+}
+
+.close-btn:hover {
+  color: var(--accent);
+  background-color: rgba(99, 102, 241, 0.1);
+}
+
+/* Right Content Area */
+.content-area {
+  flex: 1;
+  display: flex;
+  background-color: var(--bg-primary);
+}
+
+.transcription-textbox {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 16px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--text-primary);
+  resize: none;
+  user-select: text;
+}
+
+.transcription-textbox::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.transcription-textbox:focus {
+  background-color: rgba(99, 102, 241, 0.02);
+}
+
+/* Scrollbar styling */
+.transcription-textbox::-webkit-scrollbar {
+  width: 8px;
+}
+
+.transcription-textbox::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.transcription-textbox::-webkit-scrollbar-thumb {
+  background-color: rgba(99, 102, 241, 0.2);
+  border-radius: 4px;
+}
+
+.transcription-textbox::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(99, 102, 241, 0.4);
+}
+
+/* Utility classes for expanded/collapsed states */
+.app-container.collapsed .content-area {
+  display: none;
+}
+
+.app-container.expanded .content-area {
+  display: flex;
+}
+
+/* Animation for smooth transitions */
+.content-area {
+  transition: width 0.3s ease;
+}
+
+.app-container.collapsed {
+  width: 48px;
+}
+
+/* Ensure minimum functionality on very small heights */
+@media (max-height: 200px) {
+  .sidebar-content {
+    gap: 4px;
+    padding: 4px 0;
+  }
+  
+  .status-label {
+    font-size: 10px;
+  }
 }
