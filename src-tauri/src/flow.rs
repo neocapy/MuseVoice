@@ -278,11 +278,25 @@ impl Flow {
                 .supported_input_configs()
                 .map_err(|e| format!("Failed to get supported configs: {}", e))?;
 
-            let mut sample_format = SampleFormat::F32;
-            for supported_config in supported_configs {
-                sample_format = supported_config.sample_format();
-                break;
+            // Find a supported config that matches our preferred sample formats: f32 > i16 > i32
+            let mut selected_config = None;
+            let mut selected_format = None;
+            for fmt in [SampleFormat::F32, SampleFormat::I16, SampleFormat::I32] {
+                for supported_config in device.supported_input_configs().map_err(|e| format!("Failed to get supported configs: {}", e))? {
+                    if supported_config.sample_format() == fmt {
+                        selected_config = Some(supported_config);
+                        selected_format = Some(fmt);
+                        break;
+                    }
+                }
+                if selected_config.is_some() {
+                    break;
+                }
             }
+            let sample_format = match selected_format {
+                Some(fmt) => fmt,
+                None => return Err("No supported sample format (f32, i16, i32) found".to_string()),
+            };
 
             let recording_active = Arc::new(AtomicBool::new(true));
             let recording_active_clone = Arc::clone(&recording_active);
