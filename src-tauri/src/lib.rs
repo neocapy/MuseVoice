@@ -45,6 +45,9 @@ impl FlowManager {
             FlowEvent::TranscriptionResult(text) => {
                 let _ = app_handle_clone.emit("transcription-result", &text);
             }
+            FlowEvent::WavFileSaved(path) => {
+                let _ = app_handle_clone.emit("wav-file-saved", &path);
+            }
             FlowEvent::Error(error) => {
                 let _ = app_handle_clone.emit("flow-error", &error);
             }

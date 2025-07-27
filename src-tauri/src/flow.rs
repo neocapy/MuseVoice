@@ -2,9 +2,11 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, SampleRate, StreamConfig};
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_util::sync::CancellationToken;
 
@@ -24,6 +26,7 @@ pub enum FlowEvent {
     StateChanged(FlowState),
     SampleCount(usize),
     TranscriptionResult(String),
+    WavFileSaved(String), // Path to the saved WAV file
     Error(String),
 }
 
@@ -103,6 +106,50 @@ impl Flow {
         self.cancellation_token.cancel();
     }
 
+    /// Saves WAV data to $HOME/.musevoice/recording-${unixtime}.wav
+    /// Returns the full path if successful, or None if it fails gracefully
+    fn save_wav_file(&self, wav_data: &[u8]) -> Option<String> {
+        // Get home directory
+        let home_dir = match env::var("HOME") {
+            Ok(path) => PathBuf::from(path),
+            Err(_) => {
+                eprintln!("Warning: Could not determine home directory, skipping WAV file save");
+                return None;
+            }
+        };
+
+        // Create .musevoice directory
+        let musevoice_dir = home_dir.join(".musevoice");
+        if let Err(e) = fs::create_dir_all(&musevoice_dir) {
+            eprintln!("Warning: Could not create directory {:?}: {}, skipping WAV file save", musevoice_dir, e);
+            return None;
+        }
+
+        // Generate filename with Unix timestamp
+        let unix_time = match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(duration) => duration.as_secs(),
+            Err(_) => {
+                eprintln!("Warning: Could not get current time, skipping WAV file save");
+                return None;
+            }
+        };
+
+        let filename = format!("recording-{}.wav", unix_time);
+        let file_path = musevoice_dir.join(&filename);
+
+        // Save the WAV data
+        match fs::write(&file_path, wav_data) {
+            Ok(_) => {
+                println!("Saved WAV file: {:?}", file_path);
+                file_path.to_string_lossy().to_string().into()
+            }
+            Err(e) => {
+                eprintln!("Warning: Could not write WAV file {:?}: {}, skipping WAV file save", file_path, e);
+                None
+            }
+        }
+    }
+
     /// Main flow method: starts recording, waits for stop signal, then transcribes
     pub async fn run(&self, stop_signal: oneshot::Receiver<()>) -> Result<(), AudioError> {
         // Set initial state
@@ -156,6 +203,11 @@ impl Flow {
         if self.cancellation_token.is_cancelled() {
             self.set_state(FlowState::Cancelled).await;
             return Ok(());
+        }
+
+        // Save WAV file to disk (fails gracefully if not possible)
+        if let Some(saved_path) = self.save_wav_file(&wav_data) {
+            self.emit_event(FlowEvent::WavFileSaved(saved_path));
         }
 
         // Transcribe with OpenAI
@@ -272,11 +324,6 @@ impl Flow {
     ) {
         let result = (|| -> Result<(), String> {
             let channels = config.channels;
-
-            // Determine sample format and create stream
-            let supported_configs = device
-                .supported_input_configs()
-                .map_err(|e| format!("Failed to get supported configs: {}", e))?;
 
             // Find a supported config that matches our preferred sample formats: f32 > i16 > i32
             let mut selected_config = None;
