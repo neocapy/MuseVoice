@@ -2,32 +2,47 @@
 
 mod audio;
 mod encode;
+mod transcribe;
 
 use audio::{AudioManager, RecordingStatus};
+use transcribe::{TranscriptionManager, TranscriptionStatus};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::State;
 
-// Global audio manager state
+// Global state
 type AudioManagerState = Arc<Mutex<Option<AudioManager>>>;
+type TranscriptionManagerState = Arc<Mutex<Option<TranscriptionManager>>>;
 
 #[derive(Serialize, Deserialize)]
 pub struct StatusResponse {
     pub state: RecordingStatus,
     pub samples: Option<usize>,
+    pub transcription_status: TranscriptionStatus,
 }
 
 #[tauri::command]
-fn get_status(audio_manager: State<AudioManagerState>) -> Result<StatusResponse, String> {
+fn get_status(
+    audio_manager: State<AudioManagerState>,
+    transcription_manager: State<TranscriptionManagerState>,
+) -> Result<StatusResponse, String> {
     let manager_guard = audio_manager.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let transcription_guard = transcription_manager.lock().map_err(|e| format!("Lock error: {}", e))?;
     
     if let Some(manager) = manager_guard.as_ref() {
         let (status, samples) = manager.get_status_info();
+        let transcription_status = if let Some(transcription_mgr) = transcription_guard.as_ref() {
+            transcription_mgr.get_status().unwrap_or(TranscriptionStatus::Idle)
+        } else {
+            TranscriptionStatus::Idle
+        };
+        
         Ok(StatusResponse {
             state: status,
             samples,
+            transcription_status,
         })
     } else {
         Err("Audio manager not initialized".to_string())
@@ -63,7 +78,10 @@ fn start_audio_stream(audio_manager: State<AudioManagerState>) -> Result<String,
 }
 
 #[tauri::command]
-fn stop_audio_stream(audio_manager: State<AudioManagerState>) -> Result<String, String> {
+fn stop_audio_stream(
+    audio_manager: State<AudioManagerState>,
+    transcription_manager: State<TranscriptionManagerState>,
+) -> Result<String, String> {
     use std::fs::File;
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -106,32 +124,22 @@ fn stop_audio_stream(audio_manager: State<AudioManagerState>) -> Result<String, 
                     }
                 };
 
-                // Get current unix time for filename
-                let now = SystemTime::now().duration_since(UNIX_EPOCH)
-                    .map_err(|e| format!("Time error: {}", e))?
-                    .as_secs();
-                let filename = format!("test-{}.wav", now);
-
-                // Write to file
-                match File::create(&filename) {
-                    Ok(mut file) => {
-                        if let Err(e) = file.write_all(&wav_bytes) {
-                            // Reset to idle on error
-                            let _ = manager.set_idle();
-                            return Err(format!("Failed to write WAV file: {}", e));
-                        }
+                // Start transcription with the WAV data
+                let transcription_guard = transcription_manager.lock().map_err(|e| format!("Lock error: {}", e))?;
+                if let Some(transcription_mgr) = transcription_guard.as_ref() {
+                    // Cancel any existing transcription and start a new one
+                    transcription_mgr.cancel_transcription();
+                    if let Err(e) = transcription_mgr.start_transcription(wav_bytes.clone()) {
+                        eprintln!("Failed to start transcription: {}", e);
                     }
-                    Err(e) => {
-                        // Reset to idle on error
-                        let _ = manager.set_idle();
-                        return Err(format!("Failed to create WAV file: {}", e));
-                    }
+                } else {
+                    eprintln!("Transcription manager not initialized");
                 }
 
-                // Simulate transcription processing time, then set back to idle
+                // Reset audio manager to idle after a short delay
                 let manager_clone = Arc::clone(&audio_manager);
                 thread::spawn(move || {
-                    thread::sleep(Duration::from_secs(2)); // Simulate transcription time
+                    thread::sleep(Duration::from_millis(500));
                     if let Ok(guard) = manager_clone.lock() {
                         if let Some(manager) = guard.as_ref() {
                             let _ = manager.set_idle();
@@ -140,8 +148,7 @@ fn stop_audio_stream(audio_manager: State<AudioManagerState>) -> Result<String, 
                 });
 
                 Ok(format!(
-                    "Recording stopped. Captured WAV to '{}'. RMS: {:.6}",
-                    filename,
+                    "Recording stopped. Starting transcription... RMS: {:.6}",
                     rms
                 ))
             },
@@ -149,6 +156,29 @@ fn stop_audio_stream(audio_manager: State<AudioManagerState>) -> Result<String, 
         }
     } else {
         Err("Audio manager not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+fn get_transcription_status(transcription_manager: State<TranscriptionManagerState>) -> Result<TranscriptionStatus, String> {
+    let transcription_guard = transcription_manager.lock().map_err(|e| format!("Lock error: {}", e))?;
+    
+    if let Some(transcription_mgr) = transcription_guard.as_ref() {
+        transcription_mgr.get_status()
+    } else {
+        Err("Transcription manager not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+fn cancel_transcription(transcription_manager: State<TranscriptionManagerState>) -> Result<String, String> {
+    let transcription_guard = transcription_manager.lock().map_err(|e| format!("Lock error: {}", e))?;
+    
+    if let Some(transcription_mgr) = transcription_guard.as_ref() {
+        transcription_mgr.cancel_transcription();
+        Ok("Transcription cancelled".to_string())
+    } else {
+        Err("Transcription manager not initialized".to_string())
     }
 }
 
@@ -161,92 +191,34 @@ fn calculate_rms(samples: &[f32]) -> f32 {
     (sum_of_squares / samples.len() as f32).sqrt()
 }
 
-fn run_audio_test(manager: &AudioManager) {
-    println!("\n=== Audio Test Starting ===");
-    
-    for cycle in 1..=3 {
-        println!("\n--- Recording Cycle {} ---", cycle);
-        
-        // Start recording
-        match manager.start() {
-            Ok(_) => println!("✓ Recording started"),
-            Err(e) => {
-                println!("✗ Failed to start recording: {}", e);
-                continue;
-            }
-        }
-        
-        // Check status periodically for 3 seconds
-        for second in 1..=3 {
-            thread::sleep(Duration::from_secs(1));
-            match manager.status() {
-                Ok(sample_count) => println!("  Status after {}s: {} samples", second, sample_count),
-                Err(e) => println!("  Status check error: {}", e),
-            }
-        }
-        
-        // Stop recording and analyze results
-        match manager.stop() {
-            Ok(recording_data) => {
-                let rms = calculate_rms(&recording_data.samples);
-                let duration_seconds = recording_data.samples.len() as f32 / recording_data.sample_rate as f32;
-                
-                println!("✓ Recording stopped");
-                println!("  Total samples: {}", recording_data.samples.len());
-                println!("  Sample rate: {} Hz", recording_data.sample_rate);
-                println!("  Duration: {:.2} seconds", duration_seconds);
-                println!("  RMS amplitude: {:.6}", rms);
-
-                let encoded_wav = encode::resample_and_encode_wav(recording_data).unwrap();
-                println!("  WAV file size: {} bytes", encoded_wav.len());
-                
-                // Write the encoded WAV to disk as test-N.wav
-                let filename = format!("test-{}.wav", cycle);
-                match std::fs::write(&filename, &encoded_wav) {
-                    Ok(_) => println!("  Saved WAV to '{}'", filename),
-                    Err(e) => println!("  Failed to save WAV file: {}", e),
-                }
-            },
-            Err(e) => println!("✗ Failed to stop recording: {}", e),
-        }
-        
-        // Wait between cycles
-        if cycle < 3 {
-            println!("  Waiting 2 seconds before next cycle...");
-            thread::sleep(Duration::from_secs(2));
-        }
-    }
-    
-    println!("\n=== Audio Test Complete ===\n");
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let audio_manager: AudioManagerState = Arc::new(Mutex::new(None));
+    let transcription_manager: TranscriptionManagerState = Arc::new(Mutex::new(None));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(audio_manager.clone())
+        .manage(transcription_manager.clone())
         .invoke_handler(tauri::generate_handler![
             get_status,
             start_audio_stream,
-            stop_audio_stream
+            stop_audio_stream,
+            get_transcription_status,
+            cancel_transcription
         ])
         .setup(move |_app| {
             // Initialize the audio manager
             let mut manager_guard = audio_manager.lock().unwrap();
             let manager = AudioManager::new();
             
-            // Run the test in a separate thread
-            let manager_for_test = AudioManager::new();
-            thread::spawn(move || {
-                // Give the app a moment to start up
-                thread::sleep(Duration::from_millis(500));
-                run_audio_test(&manager_for_test);
-            });
+            // Initialize the transcription manager
+            let mut transcription_guard = transcription_manager.lock().unwrap();
+            let transcription_mgr = TranscriptionManager::new();
             
             *manager_guard = Some(manager);
-            println!("Audio manager initialized");
+            *transcription_guard = Some(transcription_mgr);
+            println!("Audio manager and transcription manager initialized");
             Ok(())
         })
         .run(tauri::generate_context!())

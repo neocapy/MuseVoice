@@ -4,6 +4,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 interface StatusResponse {
   state: 'idle' | 'recording' | 'transcribing';
   samples: number | null;
+  transcription_status: {
+    idle?: null;
+    inprogress?: null;
+    completed?: string;
+    error?: string;
+  };
 }
 
 class MuseVoiceApp {
@@ -63,9 +69,23 @@ class MuseVoiceApp {
   private updateFromBackendStatus(status: StatusResponse): void {
     this.currentSamples = status.samples;
     
+    // Handle transcription results
+    if (status.transcription_status.completed !== undefined) {
+      this.updateTranscription(status.transcription_status.completed);
+    } else if (status.transcription_status.error !== undefined) {
+      console.error('Transcription error:', status.transcription_status.error);
+      // Optionally show error in UI
+    }
+    
+    // Handle audio recording state
     switch (status.state) {
       case 'idle':
-        this.setStatus('ready');
+        // Check if transcription is in progress
+        if (status.transcription_status.inprogress !== undefined) {
+          this.setStatus('processing');
+        } else {
+          this.setStatus('ready');
+        }
         break;
       case 'recording':
         this.setStatus('recording');
@@ -132,7 +152,8 @@ class MuseVoiceApp {
         this.stopRecording();
         break;
       case 'processing':
-        // Cannot interact while processing
+        // Cancel transcription if clicked while processing
+        this.cancelTranscription();
         break;
     }
   }
@@ -200,6 +221,18 @@ class MuseVoiceApp {
       console.error('Failed to stop recording:', error);
       this.setStatus('ready');
       // Could show error to user here if needed
+    }
+  }
+
+  private async cancelTranscription(): Promise<void> {
+    try {
+      const result: string = await invoke('cancel_transcription');
+      console.log('Transcription cancelled:', result);
+      this.setStatus('ready');
+    } catch (error) {
+      console.error('Failed to cancel transcription:', error);
+      // Still set to ready since user clicked to cancel
+      this.setStatus('ready');
     }
   }
 

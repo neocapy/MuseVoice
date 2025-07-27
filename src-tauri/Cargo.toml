@@ -25,4 +25,5 @@ serde_json = "1"
 cpal = "0.16.0"
 rubato = "0.16.2"
 hound = "3.5.1"
+reqwest = { version = "0.12", features = ["blocking", "multipart", "json"] }
 
