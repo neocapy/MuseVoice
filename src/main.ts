@@ -1,15 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import doneSound from "./done.wav";
 
 interface StatusResponse {
-  state: 'idle' | 'recording' | 'transcribing';
+  state: 'idle' | 'recording' | 'processing' | 'completed' | 'error' | 'cancelled';
   samples: number | null;
-  transcription_status: {
-    idle?: null;
-    inprogress?: null;
-    completed?: string;
-    error?: string;
-  };
 }
 
 class MuseVoiceApp {
@@ -19,11 +14,16 @@ class MuseVoiceApp {
   private transcriptionTextbox: HTMLTextAreaElement;
   private closeBtn: HTMLButtonElement;
   private minimizeBtn: HTMLButtonElement;
+  private modeToggleBtn: HTMLButtonElement;
+  private autoCopyBtn: HTMLButtonElement;
   private appContainer: HTMLDivElement;
   private isExpanded: boolean = true;
   private dpr: number = window.devicePixelRatio || 1;
   private currentStatus: 'loading' | 'ready' | 'recording' | 'processing' = 'loading';
-  private statusPollingInterval: number | null = null;
+  private insertMode: boolean = false; // false = replace mode, true = insert mode
+  private autoCopyEnabled: boolean = true;
+  private doneAudio: HTMLAudioElement;
+
   private currentSamples: number | null = null;
   
   private SIDEBAR_WIDTH = 48;
@@ -35,9 +35,15 @@ class MuseVoiceApp {
     this.transcriptionTextbox = document.getElementById('transcription-text') as HTMLTextAreaElement;
     this.closeBtn = document.getElementById('close-btn') as HTMLButtonElement;
     this.minimizeBtn = document.getElementById('minimize-btn') as HTMLButtonElement;
+    this.modeToggleBtn = document.getElementById('mode-toggle-btn') as HTMLButtonElement;
+    this.autoCopyBtn = document.getElementById('auto-copy-btn') as HTMLButtonElement;
     this.appContainer = document.querySelector('.app-container') as HTMLDivElement;
     
     this.ctx = this.canvas.getContext('2d')!;
+    
+    // Initialize audio
+    this.doneAudio = new Audio(doneSound);
+    this.doneAudio.preload = 'auto';
     
     this.init();
   }
@@ -48,50 +54,68 @@ class MuseVoiceApp {
     this.drawStatusButton();
     this.setStatus('ready');
     this.handleWindowResize(); // Initial check
-    this.startStatusPolling();
+    this.setupBackendEventListeners();
   }
 
-  private startStatusPolling(): void {
-    // Poll status every 250ms
-    this.statusPollingInterval = window.setInterval(async () => {
-      try {
-        const status: StatusResponse = await invoke('get_status');
-        this.updateFromBackendStatus(status);
-      } catch (error) {
-        console.error('Failed to get status:', error);
-        // If we can't get status, assume something is wrong and show ready state
+  private async setupBackendEventListeners(): Promise<void> {
+    try {
+      // Import Tauri event system
+      const { listen } = await import('@tauri-apps/api/event');
+      
+      // Listen for flow state changes
+      await listen('flow-state-changed', (event: any) => {
+        console.log('Flow state changed:', event.payload);
+        this.updateFromBackendStatus({ state: event.payload, samples: null });
+      });
+      
+      // Listen for sample count updates
+      await listen('sample-count', (event: any) => {
+        this.currentSamples = event.payload;
+        if (this.currentStatus === 'recording') {
+          this.setStatus('recording'); // This will update the display with new sample count
+        }
+      });
+      
+      // Listen for transcription results
+      await listen('transcription-result', (event: any) => {
+        console.log('Transcription result:', event.payload);
+        this.updateTranscription(event.payload);
+        this.doneAudio.play().catch(e => console.error("Failed to play done sound:", e));
+      });
+      
+      // Listen for flow errors
+      await listen('flow-error', (event: any) => {
+        console.error('Flow error:', event.payload);
         this.setStatus('ready');
-        this.currentSamples = null;
-      }
-    }, 250);
+        // Optionally show error to user
+      });
+      
+      console.log('Backend event listeners set up');
+    } catch (error) {
+      console.error('Failed to set up backend event listeners:', error);
+    }
   }
 
   private updateFromBackendStatus(status: StatusResponse): void {
     this.currentSamples = status.samples;
     
-    // Handle transcription results
-    if (status.transcription_status.completed !== undefined) {
-      this.updateTranscription(status.transcription_status.completed);
-    } else if (status.transcription_status.error !== undefined) {
-      console.error('Transcription error:', status.transcription_status.error);
-      // Optionally show error in UI
-    }
-    
-    // Handle audio recording state
+    // Handle state changes - map backend states to frontend states
     switch (status.state) {
       case 'idle':
-        // Check if transcription is in progress
-        if (status.transcription_status.inprogress !== undefined) {
-          this.setStatus('processing');
-        } else {
-          this.setStatus('ready');
-        }
+        this.setStatus('ready');
         break;
       case 'recording':
         this.setStatus('recording');
         break;
-      case 'transcribing':
+      case 'processing':
         this.setStatus('processing');
+        break;
+      case 'completed':
+        this.setStatus('ready');
+        break;
+      case 'error':
+      case 'cancelled':
+        this.setStatus('ready');
         break;
     }
   }
@@ -123,6 +147,12 @@ class MuseVoiceApp {
     // Minimize button
     this.minimizeBtn.addEventListener('click', async () => await this.handleMinimize());
     
+    // Mode toggle button
+    this.modeToggleBtn.addEventListener('click', () => this.handleModeToggle());
+    
+    // Auto-copy toggle button
+    this.autoCopyBtn.addEventListener('click', () => this.handleAutoCopyToggle());
+    
     // Textbox change events (empty as requested)
     this.transcriptionTextbox.addEventListener('input', (e) => this.handleTextboxChange(e));
     this.transcriptionTextbox.addEventListener('keydown', (e) => this.handleTextboxKeydown(e));
@@ -140,6 +170,14 @@ class MuseVoiceApp {
     // Prevent drag on textbox to allow text selection
     this.transcriptionTextbox.addEventListener('mousedown', (e) => {
       e.stopPropagation();
+    });
+    
+    // Global Tab key handler to trigger microphone button
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') {
+        e.preventDefault(); // Cancel default Tab behavior
+        this.handleCanvasClick(); // Trigger microphone button functionality
+      }
     });
   }
 
@@ -174,11 +212,87 @@ class MuseVoiceApp {
     }
   }
 
-  private handleTextboxChange(event: Event): void {
-    // Empty as requested
+  private handleModeToggle(): void {
+    this.insertMode = !this.insertMode;
+    this.modeToggleBtn.textContent = this.insertMode ? 'Ins' : 'Repl';
+    this.modeToggleBtn.title = this.insertMode ? 'Insert Mode (Click to switch to Replace)' : 'Replace Mode (Click to switch to Insert)';
   }
 
-  private handleTextboxKeydown(event: KeyboardEvent): void {
+  private handleAutoCopyToggle(): void {
+    this.autoCopyEnabled = !this.autoCopyEnabled;
+    this.autoCopyBtn.textContent = this.autoCopyEnabled ? 'Clip' : 'Local';
+    this.autoCopyBtn.title = this.autoCopyEnabled ? 'Auto-copy enabled (Click to disable)' : 'Auto-copy disabled (Click to enable)';
+    
+    // Update button styling to indicate state
+    if (this.autoCopyEnabled) {
+      this.autoCopyBtn.style.backgroundColor = 'rgba(99, 102, 241, 0.2)';
+      this.autoCopyBtn.style.borderColor = 'rgba(99, 102, 241, 0.6)';
+    } else {
+      this.autoCopyBtn.style.backgroundColor = 'rgba(99, 102, 241, 0.05)';
+      this.autoCopyBtn.style.borderColor = 'rgba(99, 102, 241, 0.2)';
+    }
+  }
+
+  private async copyToClipboard(text: string): Promise<void> {
+    if (!this.autoCopyEnabled || !text.trim()) {
+      return;
+    }
+    
+    try {
+      // Use invoke to call a backend clipboard command
+      await invoke('copy_to_clipboard', { text });
+      console.log('Text copied to clipboard:', text.substring(0, 50) + (text.length > 50 ? '...' : ''));
+    } catch (error) {
+      console.error('Failed to copy text to clipboard:', error);
+    }
+  }
+
+  private addSmartSpacing(text: string, insertPosition: number, fullText: string): { text: string, adjustedPosition: number } {
+    // Characters that don't need a space after them
+    const noSpaceAfter = new Set(['(', '[', '{', '"', "'", '`', ' ', '\n', '\t']);
+    // Characters that don't need a space before them
+    const noSpaceBefore = new Set([')', ']', '}', '.', ',', ';', ':', '!', '?', '"', "'", '`', ' ', '\n', '\t']);
+    
+    let processedText = text;
+    let positionAdjustment = 0;
+    
+    // Check if we need a space before the insertion
+    const charBefore = insertPosition > 0 ? fullText[insertPosition - 1] : '';
+    const firstCharOfText = text.length > 0 ? text[0] : '';
+    
+    if (charBefore && 
+        !noSpaceAfter.has(charBefore) && 
+        !noSpaceBefore.has(firstCharOfText) && 
+        firstCharOfText !== ' ') {
+      processedText = ' ' + processedText;
+      positionAdjustment += 1;
+    }
+    
+    // Check if we need a space after the insertion
+    const charAfter = insertPosition < fullText.length ? fullText[insertPosition] : '';
+    const lastCharOfText = text.length > 0 ? text[text.length - 1] : '';
+    
+    if (charAfter && 
+        !noSpaceBefore.has(charAfter) && 
+        !noSpaceAfter.has(lastCharOfText) && 
+        lastCharOfText !== ' ') {
+      processedText = processedText + ' ';
+    }
+    
+    return { 
+      text: processedText, 
+      adjustedPosition: insertPosition + positionAdjustment 
+    };
+  }
+
+  private handleTextboxChange(_event: Event): void {
+    // Copy to clipboard if auto-copy is enabled
+    if (this.autoCopyEnabled) {
+      this.copyToClipboard(this.transcriptionTextbox.value);
+    }
+  }
+
+  private handleTextboxKeydown(_event: KeyboardEvent): void {
     // Empty as requested
   }
 
@@ -262,10 +376,8 @@ class MuseVoiceApp {
   }
 
   public destroy(): void {
-    if (this.statusPollingInterval !== null) {
-      clearInterval(this.statusPollingInterval);
-      this.statusPollingInterval = null;
-    }
+    // Cleanup is now handled by the backend event system
+    // No polling to clean up
   }
 
   private drawStatusButton(): void {
@@ -355,10 +467,40 @@ class MuseVoiceApp {
   }
 
   public updateTranscription(text: string): void {
-    this.transcriptionTextbox.value = text;
+    if (this.insertMode) {
+      // Insert mode: insert at current cursor position with smart spacing
+      const currentText = this.transcriptionTextbox.value;
+      const cursorPosition = this.transcriptionTextbox.selectionStart || 0;
+      
+      // Apply smart spacing
+      const { text: processedText, adjustedPosition } = this.addSmartSpacing(text, cursorPosition, currentText);
+      
+      // Insert the text at cursor position
+      const beforeCursor = currentText.substring(0, cursorPosition);
+      const afterCursor = currentText.substring(cursorPosition);
+      const newText = beforeCursor + processedText + afterCursor;
+      
+      this.transcriptionTextbox.value = newText;
+      
+      // Position cursor at end of inserted text
+      const newCursorPosition = adjustedPosition + processedText.length;
+      this.transcriptionTextbox.setSelectionRange(newCursorPosition, newCursorPosition);
+    } else {
+      // Replace mode: replace all text (original behavior)
+      this.transcriptionTextbox.value = text;
+      // Position cursor at end of text
+      const endPosition = text.length;
+      this.transcriptionTextbox.setSelectionRange(endPosition, endPosition);
+    }
+    
     // Auto-expand if collapsed and there's new text (only if window is wide enough)
     if (!this.isExpanded && text.trim() && window.innerWidth >= this.COLLAPSE_WIDTH) {
       this.handleWindowResize(); // This will expand if window is wide enough
+    }
+    
+    // Copy to clipboard if auto-copy is enabled
+    if (this.autoCopyEnabled) {
+      this.copyToClipboard(this.transcriptionTextbox.value);
     }
   }
 
