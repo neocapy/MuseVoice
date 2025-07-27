@@ -9,14 +9,18 @@
   </head>
 
   <body>
-    <div class="app-container" data-tauri-drag-region>
+    <div class="app-container">
       <!-- Left Sidebar -->
       <div class="sidebar">
+        <div class="drag-handle" data-tauri-drag-region title="Drag to move window"></div>
         <div class="sidebar-content">
           <canvas id="status-canvas" width="48" height="48"></canvas>
           <label id="status-label" class="status-label">Loading</label>
         </div>
-        <button id="close-btn" class="close-btn" title="Close">✕</button>
+        <div class="sidebar-controls">
+          <button id="minimize-btn" class="control-btn" title="Minimize">−</button>
+          <button id="close-btn" class="control-btn" title="Close">✕</button>
+        </div>
       </div>
       
       <!-- Right Content Area -->

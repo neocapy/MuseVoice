@@ -1,23 +1,34 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+interface StatusResponse {
+  state: 'idle' | 'recording' | 'transcribing';
+  samples: number | null;
+}
+
 class MuseVoiceApp {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private statusLabel: HTMLLabelElement;
   private transcriptionTextbox: HTMLTextAreaElement;
   private closeBtn: HTMLButtonElement;
+  private minimizeBtn: HTMLButtonElement;
   private appContainer: HTMLDivElement;
   private isExpanded: boolean = true;
-  
-  // Status states
+  private dpr: number = window.devicePixelRatio || 1;
   private currentStatus: 'loading' | 'ready' | 'recording' | 'processing' = 'loading';
-
+  private statusPollingInterval: number | null = null;
+  private currentSamples: number | null = null;
+  
+  private SIDEBAR_WIDTH = 48;
+  private COLLAPSE_WIDTH = 72;
+  
   constructor() {
     this.canvas = document.getElementById('status-canvas') as HTMLCanvasElement;
     this.statusLabel = document.getElementById('status-label') as HTMLLabelElement;
     this.transcriptionTextbox = document.getElementById('transcription-text') as HTMLTextAreaElement;
     this.closeBtn = document.getElementById('close-btn') as HTMLButtonElement;
+    this.minimizeBtn = document.getElementById('minimize-btn') as HTMLButtonElement;
     this.appContainer = document.querySelector('.app-container') as HTMLDivElement;
     
     this.ctx = this.canvas.getContext('2d')!;
@@ -27,8 +38,59 @@ class MuseVoiceApp {
 
   private init(): void {
     this.setupEventListeners();
+    this.setupCanvas();
     this.drawStatusButton();
     this.setStatus('ready');
+    this.handleWindowResize(); // Initial check
+    this.startStatusPolling();
+  }
+
+  private startStatusPolling(): void {
+    // Poll status every 250ms
+    this.statusPollingInterval = window.setInterval(async () => {
+      try {
+        const status: StatusResponse = await invoke('get_status');
+        this.updateFromBackendStatus(status);
+      } catch (error) {
+        console.error('Failed to get status:', error);
+        // If we can't get status, assume something is wrong and show ready state
+        this.setStatus('ready');
+        this.currentSamples = null;
+      }
+    }, 250);
+  }
+
+  private updateFromBackendStatus(status: StatusResponse): void {
+    this.currentSamples = status.samples;
+    
+    switch (status.state) {
+      case 'idle':
+        this.setStatus('ready');
+        break;
+      case 'recording':
+        this.setStatus('recording');
+        break;
+      case 'transcribing':
+        this.setStatus('processing');
+        break;
+    }
+  }
+
+  private formatSampleCount(samples: number): string {
+    if (samples >= 1000) {
+      return Math.floor(samples / 1000) + 'k';
+    }
+    return samples.toString();
+  }
+
+  private setupCanvas(): void {
+    const size = this.SIDEBAR_WIDTH;
+    // Set canvas size accounting for DPR
+    this.canvas.width = size * this.dpr;
+    this.canvas.height = size * this.dpr;
+    this.canvas.style.width = size + 'px';
+    this.canvas.style.height = size + 'px';
+    this.ctx.scale(this.dpr, this.dpr);
   }
 
   private setupEventListeners(): void {
@@ -36,14 +98,24 @@ class MuseVoiceApp {
     this.canvas.addEventListener('click', () => this.handleCanvasClick());
     
     // Close button
-    this.closeBtn.addEventListener('click', () => this.handleClose());
+    this.closeBtn.addEventListener('click', async () => await this.handleClose());
     
-    // Textbox change events
+    // Minimize button
+    this.minimizeBtn.addEventListener('click', async () => await this.handleMinimize());
+    
+    // Textbox change events (empty as requested)
     this.transcriptionTextbox.addEventListener('input', (e) => this.handleTextboxChange(e));
     this.transcriptionTextbox.addEventListener('keydown', (e) => this.handleTextboxKeydown(e));
     
-    // Double-click sidebar to toggle expand/collapse
-    document.querySelector('.sidebar')?.addEventListener('dblclick', () => this.toggleExpanded());
+    // Window resize to handle width-based collapse
+    window.addEventListener('resize', () => this.handleWindowResize());
+    
+    // DPR change detection
+    window.matchMedia(`(resolution: ${this.dpr}dppx)`).addEventListener('change', () => {
+      this.dpr = window.devicePixelRatio || 1;
+      this.setupCanvas();
+      this.drawStatusButton();
+    });
     
     // Prevent drag on textbox to allow text selection
     this.transcriptionTextbox.addEventListener('mousedown', (e) => {
@@ -65,74 +137,69 @@ class MuseVoiceApp {
     }
   }
 
-  private handleClose(): void {
-    getCurrentWindow().close();
+  private async handleClose(): Promise<void> {
+    try {
+      await getCurrentWindow().close();
+    } catch (error) {
+      console.error('Failed to close window:', error);
+    }
+  }
+
+  private async handleMinimize(): Promise<void> {
+    try {
+      await getCurrentWindow().minimize();
+    } catch (error) {
+      console.error('Failed to minimize window:', error);
+    }
   }
 
   private handleTextboxChange(event: Event): void {
-    const target = event.target as HTMLTextAreaElement;
-    // Here you can add logic to handle text changes
-    console.log('Text changed:', target.value);
+    // Empty as requested
   }
 
   private handleTextboxKeydown(event: KeyboardEvent): void {
-    // Handle special key combinations
-    if (event.ctrlKey || event.metaKey) {
-      switch (event.key) {
-        case 'a':
-          // Allow Ctrl/Cmd+A for select all
-          break;
-        case 'c':
-          // Allow Ctrl/Cmd+C for copy
-          break;
-        case 'v':
-          // Allow Ctrl/Cmd+V for paste
-          break;
-        case 'Enter':
-          // Ctrl/Cmd+Enter could trigger some action
-          event.preventDefault();
-          this.sendTranscriptionToActiveWindow();
-          break;
+    // Empty as requested
+  }
+
+  private handleWindowResize(): void {
+    const windowWidth = window.innerWidth;
+    const shouldExpand = windowWidth >= this.COLLAPSE_WIDTH;
+    
+    if (shouldExpand !== this.isExpanded) {
+      this.isExpanded = shouldExpand;
+      
+      if (this.isExpanded) {
+        this.appContainer.classList.remove('collapsed');
+        this.appContainer.classList.add('expanded');
+      } else {
+        this.appContainer.classList.remove('expanded');
+        this.appContainer.classList.add('collapsed');
       }
     }
   }
 
-  private toggleExpanded(): void {
-    this.isExpanded = !this.isExpanded;
-    
-    if (this.isExpanded) {
-      this.appContainer.classList.remove('collapsed');
-      this.appContainer.classList.add('expanded');
-    } else {
-      this.appContainer.classList.remove('expanded');
-      this.appContainer.classList.add('collapsed');
+  private async startRecording(): Promise<void> {
+    try {
+      this.setStatus('recording');
+      const result: string = await invoke('start_audio_stream');
+      console.log('Recording started:', result);
+    } catch (error) {
+      console.error('Failed to start recording:', error);
+      this.setStatus('ready');
+      // Could show error to user here if needed
     }
   }
 
-  private startRecording(): void {
-    this.setStatus('recording');
-    // TODO: Implement actual recording logic
-    console.log('Starting recording...');
-  }
-
-  private stopRecording(): void {
-    this.setStatus('processing');
-    // TODO: Implement stopping recording and sending to STT
-    console.log('Stopping recording...');
-    
-    // Simulate processing delay
-    setTimeout(() => {
+  private async stopRecording(): Promise<void> {
+    try {
+      this.setStatus('processing');
+      const result: string = await invoke('stop_audio_stream');
+      console.log('Recording stopped:', result);
+      // Status will be updated by polling to show transcribing -> ready
+    } catch (error) {
+      console.error('Failed to stop recording:', error);
       this.setStatus('ready');
-      // TODO: Replace with actual transcription result
-      this.updateTranscription('This is a sample transcription result.');
-    }, 2000);
-  }
-
-  private sendTranscriptionToActiveWindow(): void {
-    const text = this.transcriptionTextbox.value;
-    if (text.trim()) {
-      // TODO: Implement sending text to active window via keyboard events
-      console.log('Sending to active window:', text);
+      // Could show error to user here if needed
     }
   }
 
@@ -147,18 +214,29 @@ class MuseVoiceApp {
         this.statusLabel.textContent = 'Ready';
         break;
       case 'recording':
-        this.statusLabel.textContent = 'Recording';
+        if (this.currentSamples !== null) {
+          this.statusLabel.textContent = this.formatSampleCount(this.currentSamples);
+        } else {
+          this.statusLabel.textContent = 'Rec';
+        }
         break;
       case 'processing':
-        this.statusLabel.textContent = 'Processing';
+        this.statusLabel.textContent = 'Proc';
         break;
     }
     
     this.drawStatusButton();
   }
 
+  public destroy(): void {
+    if (this.statusPollingInterval !== null) {
+      clearInterval(this.statusPollingInterval);
+      this.statusPollingInterval = null;
+    }
+  }
+
   private drawStatusButton(): void {
-    const size = 48;
+    const size = this.SIDEBAR_WIDTH;
     const center = size / 2;
     const radius = 16;
     
@@ -245,9 +323,9 @@ class MuseVoiceApp {
 
   public updateTranscription(text: string): void {
     this.transcriptionTextbox.value = text;
-    // Auto-expand if collapsed and there's new text
-    if (!this.isExpanded && text.trim()) {
-      this.toggleExpanded();
+    // Auto-expand if collapsed and there's new text (only if window is wide enough)
+    if (!this.isExpanded && text.trim() && window.innerWidth >= this.COLLAPSE_WIDTH) {
+      this.handleWindowResize(); // This will expand if window is wide enough
     }
   }
 
