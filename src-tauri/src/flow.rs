@@ -325,25 +325,75 @@ impl Flow {
         let result = (|| -> Result<(), String> {
             let channels = config.channels;
 
-            // Find a supported config that matches our preferred sample formats: f32 > i16 > i32
-            let mut selected_config = None;
-            let mut selected_format = None;
-            for fmt in [SampleFormat::F32, SampleFormat::I16, SampleFormat::I32] {
-                for supported_config in device.supported_input_configs().map_err(|e| format!("Failed to get supported configs: {}", e))? {
-                    if supported_config.sample_format() == fmt {
-                        selected_config = Some(supported_config);
-                        selected_format = Some(fmt);
-                        break;
-                    }
+            // Find the best supported config according to our preference order:
+            // 1. 24000 Hz f32
+            // 2. 24000 Hz i16
+            // 3. 24000 Hz i32
+            // 4. >24000 Hz f32, i16, i32 (lowest above 24000 preferred)
+            // 5. Any f32, i16, i32 (lowest sample rate preferred)
+            // Otherwise, bail.
+
+            let supported_configs: Vec<_> = device
+                .supported_input_configs()
+                .map_err(|e| format!("Failed to get supported configs: {}", e))?
+                .collect();
+
+            // Assign a score to each config: lower is better
+            // (score, sample_rate, format, config)
+            let mut scored_configs: Vec<(u32, u32, SampleFormat, cpal::SupportedStreamConfigRange)> = vec![];
+
+            for config in supported_configs.into_iter() {
+                let fmt = config.sample_format();
+                let min_rate = config.min_sample_rate().0;
+                let max_rate = config.max_sample_rate().0;
+                // We'll just use min_rate for scoring, but could be more sophisticated
+                let mut best_rate = min_rate;
+                // If the config supports a range, prefer 24000 if in range, else min above 24000, else min
+                if min_rate <= 24000 && max_rate >= 24000 {
+                    best_rate = 24000;
+                } else if min_rate > 24000 {
+                    best_rate = min_rate;
                 }
-                if selected_config.is_some() {
-                    break;
-                }
+                let score = if best_rate == 24000 && fmt == SampleFormat::F32 {
+                    0
+                } else if best_rate == 24000 && fmt == SampleFormat::I16 {
+                    1
+                } else if best_rate == 24000 && fmt == SampleFormat::I32 {
+                    2
+                } else if best_rate > 24000 && fmt == SampleFormat::F32 {
+                    3
+                } else if best_rate > 24000 && fmt == SampleFormat::I16 {
+                    4
+                } else if best_rate > 24000 && fmt == SampleFormat::I32 {
+                    5
+                } else if fmt == SampleFormat::F32 {
+                    6
+                } else if fmt == SampleFormat::I16 {
+                    7
+                } else if fmt == SampleFormat::I32 {
+                    8
+                } else {
+                    100
+                };
+                scored_configs.push((score, best_rate, fmt, config));
             }
-            let sample_format = match selected_format {
-                Some(fmt) => fmt,
-                None => return Err("No supported sample format (f32, i16, i32) found".to_string()),
+
+            // Sort by score, then by sample rate (prefer lower sample rate for resampling quality)
+            scored_configs.sort_by(|a, b| {
+                a.0.cmp(&b.0)
+                    .then_with(|| a.1.cmp(&b.1))
+            });
+
+            let (_, selected_rate, selected_format, _) = match scored_configs.first() {
+                Some((score, rate, fmt, config)) if *score < 100 => (*score, *rate, *fmt, config.clone()),
+                _ => return Err("No supported sample format (f32, i16, i32) found".to_string()),
             };
+
+            // Build the actual config to use
+            let mut config = config.clone();
+            config.sample_rate = cpal::SampleRate(selected_rate);
+
+            let sample_format = selected_format;
 
             let recording_active = Arc::new(AtomicBool::new(true));
             let recording_active_clone = Arc::clone(&recording_active);
@@ -423,7 +473,7 @@ impl Flow {
         }
 
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(60))
             .build()
             .map_err(|e| AudioError {
                 message: format!("Failed to create HTTP client: {}", e),
