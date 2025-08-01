@@ -27,6 +27,7 @@ pub enum FlowEvent {
     SampleCount(usize),
     TranscriptionResult(String),
     WavFileSaved(String), // Path to the saved WAV file
+    WavDataReady(Vec<u8>), // WAV buffer ready for transcription (for retry functionality)
     Error(String),
 }
 
@@ -205,9 +206,38 @@ impl Flow {
             return Ok(());
         }
 
+        // Emit WAV data for potential retry functionality
+        self.emit_event(FlowEvent::WavDataReady(wav_data.clone()));
+
         // Save WAV file to disk (fails gracefully if not possible)
         if let Some(saved_path) = self.save_wav_file(&wav_data) {
             self.emit_event(FlowEvent::WavFileSaved(saved_path));
+        }
+
+        // Transcribe with OpenAI
+        match self.transcribe_audio(wav_data).await {
+            Ok(text) => {
+                self.set_state(FlowState::Completed).await;
+                self.emit_event(FlowEvent::TranscriptionResult(text));
+                Ok(())
+            }
+            Err(e) => {
+                self.set_state(FlowState::Error).await;
+                self.emit_event(FlowEvent::Error(e.message.clone()));
+                Err(e)
+            }
+        }
+    }
+
+    /// Retry transcription with existing WAV data (skips recording and encoding)
+    pub async fn run_transcription_only(&self, wav_data: Vec<u8>) -> Result<(), AudioError> {
+        // Set to processing state
+        self.set_state(FlowState::Processing).await;
+
+        // Check if cancelled
+        if self.cancellation_token.is_cancelled() {
+            self.set_state(FlowState::Cancelled).await;
+            return Ok(());
         }
 
         // Transcribe with OpenAI
@@ -489,7 +519,7 @@ impl Flow {
                         message: format!("Failed to create file part: {}", e),
                     })?,
             )
-            .text("model", "gpt-4o-transcribe");
+            .text("model", "whisper-1");
 
         println!("Sending transcription request to OpenAI...");
 

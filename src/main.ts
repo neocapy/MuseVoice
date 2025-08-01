@@ -16,6 +16,7 @@ class MuseVoiceApp {
   private minimizeBtn: HTMLButtonElement;
   private modeToggleBtn: HTMLButtonElement;
   private autoCopyBtn: HTMLButtonElement;
+  private retryBtn: HTMLButtonElement;
   private appContainer: HTMLDivElement;
   private isExpanded: boolean = true;
   private dpr: number = window.devicePixelRatio || 1;
@@ -37,6 +38,7 @@ class MuseVoiceApp {
     this.minimizeBtn = document.getElementById('minimize-btn') as HTMLButtonElement;
     this.modeToggleBtn = document.getElementById('mode-toggle-btn') as HTMLButtonElement;
     this.autoCopyBtn = document.getElementById('auto-copy-btn') as HTMLButtonElement;
+    this.retryBtn = document.getElementById('retry-btn') as HTMLButtonElement;
     this.appContainer = document.querySelector('.app-container') as HTMLDivElement;
     
     this.ctx = this.canvas.getContext('2d')!;
@@ -55,6 +57,7 @@ class MuseVoiceApp {
     this.setStatus('ready');
     this.handleWindowResize(); // Initial check
     this.setupBackendEventListeners();
+    this.checkInitialRetryData(); // Check if there's existing retry data
   }
 
   private async setupBackendEventListeners(): Promise<void> {
@@ -88,6 +91,14 @@ class MuseVoiceApp {
         console.error('Flow error:', event.payload);
         this.setStatus('ready');
         // Optionally show error to user
+      });
+      
+
+      
+      // Listen for retry availability changes
+      await listen('retry-available', (event: any) => {
+        console.log('Retry available:', event.payload);
+        this.setRetryButtonVisibility(event.payload);
       });
       
       console.log('Backend event listeners set up');
@@ -152,6 +163,9 @@ class MuseVoiceApp {
     
     // Auto-copy toggle button
     this.autoCopyBtn.addEventListener('click', () => this.handleAutoCopyToggle());
+    
+    // Retry button
+    this.retryBtn.addEventListener('click', () => this.handleRetryClick());
     
     // Textbox change events (empty as requested)
     this.transcriptionTextbox.addEventListener('input', (e) => this.handleTextboxChange(e));
@@ -230,6 +244,30 @@ class MuseVoiceApp {
     } else {
       this.autoCopyBtn.style.backgroundColor = 'rgba(99, 102, 241, 0.05)';
       this.autoCopyBtn.style.borderColor = 'rgba(99, 102, 241, 0.2)';
+    }
+  }
+
+  private async handleRetryClick(): Promise<void> {
+    try {
+      this.setStatus('processing');
+      const result: string = await invoke('retry_transcription');
+      console.log('Retry started:', result);
+    } catch (error) {
+      console.error('Failed to retry transcription:', error);
+      this.setStatus('ready');
+    }
+  }
+
+  private setRetryButtonVisibility(visible: boolean): void {
+    this.retryBtn.style.display = visible ? 'flex' : 'none';
+  }
+
+  private async checkInitialRetryData(): Promise<void> {
+    try {
+      const hasRetryData: boolean = await invoke('has_retry_data');
+      this.setRetryButtonVisibility(hasRetryData);
+    } catch (error) {
+      console.error('Failed to check initial retry data:', error);
     }
   }
 
@@ -467,6 +505,7 @@ class MuseVoiceApp {
   }
 
   public updateTranscription(text: string): void {
+    // Clear retry data on successful transcription is now handled by backend
     if (this.insertMode) {
       // Insert mode: insert at current cursor position with smart spacing
       const currentText = this.transcriptionTextbox.value;

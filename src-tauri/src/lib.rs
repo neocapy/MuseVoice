@@ -16,6 +16,7 @@ type FlowManagerState = Arc<RwLock<Option<FlowManager>>>;
 pub struct FlowManager {
     current_flow: Option<Arc<Flow>>,
     stop_sender: Option<oneshot::Sender<()>>,
+    retry_wav_data: Option<Vec<u8>>, // Store WAV data for retry functionality
 }
 
 impl FlowManager {
@@ -23,10 +24,11 @@ impl FlowManager {
         Self {
             current_flow: None,
             stop_sender: None,
+            retry_wav_data: None,
         }
     }
 
-    pub async fn start_flow(&mut self, app_handle: AppHandle) -> Result<(), String> {
+    pub async fn start_flow(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState) -> Result<(), String> {
         // Cancel any existing flow
         self.cancel_flow().await;
 
@@ -35,6 +37,7 @@ impl FlowManager {
 
         // Create callback for flow events
         let app_handle_clone = app_handle.clone();
+        let flow_manager_weak = Arc::downgrade(&flow_manager_state);
         let callback: FlowCallback = Arc::new(move |event| match event {
             FlowEvent::StateChanged(state) => {
                 let _ = app_handle_clone.emit("flow-state-changed", &state);
@@ -43,12 +46,44 @@ impl FlowManager {
                 let _ = app_handle_clone.emit("sample-count", count);
             }
             FlowEvent::TranscriptionResult(text) => {
+                // Clear retry data on successful transcription
+                if let Some(manager_arc) = flow_manager_weak.upgrade() {
+                    tokio::spawn(async move {
+                        let mut manager_guard = manager_arc.write().await;
+                        if let Some(manager) = manager_guard.as_mut() {
+                            manager.clear_wav_data();
+                        }
+                    });
+                }
                 let _ = app_handle_clone.emit("transcription-result", &text);
+                let _ = app_handle_clone.emit("retry-available", false);
             }
             FlowEvent::WavFileSaved(path) => {
                 let _ = app_handle_clone.emit("wav-file-saved", &path);
             }
+            FlowEvent::WavDataReady(wav_data) => {
+                // Store WAV data directly in FlowManager
+                if let Some(manager_arc) = flow_manager_weak.upgrade() {
+                    tokio::spawn(async move {
+                        let mut manager_guard = manager_arc.write().await;
+                        if let Some(manager) = manager_guard.as_mut() {
+                            manager.store_wav_data(wav_data);
+                        }
+                    });
+                }
+            }
             FlowEvent::Error(error) => {
+                // Emit retry availability when there's an error and we have WAV data
+                let app_handle_clone2 = app_handle_clone.clone();
+                if let Some(manager_arc) = flow_manager_weak.upgrade() {
+                    tokio::spawn(async move {
+                        let manager_guard = manager_arc.read().await;
+                        if let Some(manager) = manager_guard.as_ref() {
+                            let retry_available = manager.has_retry_data();
+                            let _ = app_handle_clone2.emit("retry-available", retry_available);
+                        }
+                    });
+                }
                 let _ = app_handle_clone.emit("flow-error", &error);
             }
         });
@@ -102,6 +137,81 @@ impl FlowManager {
             FlowState::Idle
         }
     }
+
+    pub fn store_wav_data(&mut self, wav_data: Vec<u8>) {
+        self.retry_wav_data = Some(wav_data);
+    }
+
+    pub fn clear_wav_data(&mut self) {
+        self.retry_wav_data = None;
+    }
+
+    pub fn has_retry_data(&self) -> bool {
+        self.retry_wav_data.is_some()
+    }
+
+    pub async fn retry_transcription(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState) -> Result<(), String> {
+        // Get the stored WAV data
+        let wav_data = self.retry_wav_data.clone().ok_or_else(|| {
+            "No recorded audio available for retry".to_string()
+        })?;
+
+        // Cancel any existing flow
+        self.cancel_flow().await;
+
+        // Create callback for flow events
+        let app_handle_clone = app_handle.clone();
+        let flow_manager_weak = Arc::downgrade(&flow_manager_state);
+        let callback: FlowCallback = Arc::new(move |event| match event {
+            FlowEvent::StateChanged(state) => {
+                let _ = app_handle_clone.emit("flow-state-changed", &state);
+            }
+            FlowEvent::TranscriptionResult(text) => {
+                // Clear retry data on successful transcription
+                if let Some(manager_arc) = flow_manager_weak.upgrade() {
+                    tokio::spawn(async move {
+                        let mut manager_guard = manager_arc.write().await;
+                        if let Some(manager) = manager_guard.as_mut() {
+                            manager.clear_wav_data();
+                        }
+                    });
+                }
+                let _ = app_handle_clone.emit("transcription-result", &text);
+                let _ = app_handle_clone.emit("retry-available", false);
+            }
+            FlowEvent::Error(error) => {
+                // Emit retry availability when there's an error and we have WAV data
+                let app_handle_clone2 = app_handle_clone.clone();
+                if let Some(manager_arc) = flow_manager_weak.upgrade() {
+                    tokio::spawn(async move {
+                        let manager_guard = manager_arc.read().await;
+                        if let Some(manager) = manager_guard.as_ref() {
+                            let retry_available = manager.has_retry_data();
+                            let _ = app_handle_clone2.emit("retry-available", retry_available);
+                        }
+                    });
+                }
+                let _ = app_handle_clone.emit("flow-error", &error);
+            }
+            _ => {} // Ignore other events for retry
+        });
+
+        // Create flow and run transcription only
+        let flow = Arc::new(Flow::new(callback));
+        let flow_clone = Arc::clone(&flow);
+
+        // Store reference
+        self.current_flow = Some(flow);
+
+        // Start the transcription-only flow in a background task
+        tokio::spawn(async move {
+            if let Err(e) = flow_clone.run_transcription_only(wav_data).await {
+                eprintln!("Retry transcription error: {}", e);
+            }
+        });
+
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -141,7 +251,8 @@ async fn start_audio_stream(
 
         match current_state {
             FlowState::Idle | FlowState::Completed | FlowState::Error | FlowState::Cancelled => {
-                manager.start_flow(app_handle).await?;
+                let flow_manager_clone = Arc::clone(&flow_manager.inner());
+                manager.start_flow(app_handle, flow_manager_clone).await?;
                 Ok("Audio recording started successfully".to_string())
             }
             _ => Err("Cannot start recording: flow is not idle".to_string()),
@@ -182,6 +293,36 @@ async fn cancel_transcription(flow_manager: State<'_, FlowManagerState>) -> Resu
     }
 }
 
+
+
+#[tauri::command]
+async fn retry_transcription(
+    flow_manager: State<'_, FlowManagerState>,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    let mut manager_guard = flow_manager.write().await;
+
+    if let Some(manager) = manager_guard.as_mut() {
+        let flow_manager_clone = Arc::clone(&flow_manager.inner());
+        manager.retry_transcription(app_handle, flow_manager_clone).await?;
+        Ok("Retrying transcription...".to_string())
+    } else {
+        Err("Flow manager not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+async fn has_retry_data(flow_manager: State<'_, FlowManagerState>) -> Result<bool, String> {
+    let manager_guard = flow_manager.read().await;
+
+    if let Some(manager) = manager_guard.as_ref() {
+        Ok(manager.has_retry_data())
+    } else {
+        Ok(false)
+    }
+}
+
+
 #[tauri::command]
 async fn copy_to_clipboard(text: String, app_handle: AppHandle) -> Result<String, String> {
     // Use Tauri's clipboard API through the app handle
@@ -204,6 +345,8 @@ pub fn run() {
             start_audio_stream,
             stop_audio_stream,
             cancel_transcription,
+            retry_transcription,
+            has_retry_data,
             copy_to_clipboard
         ])
         .setup(move |_app| {

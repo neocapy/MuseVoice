@@ -172,6 +172,19 @@ html, body {
   border-color: rgba(99, 102, 241, 0.4);
 }
 
+.retry-btn {
+  background-color: rgba(239, 68, 68, 0.1) !important; /* Light red background */
+  color: #dc2626 !important; /* Dark red text */
+  border: 1px solid rgba(239, 68, 68, 0.3) !important;
+  font-weight: 500;
+}
+
+.retry-btn:hover {
+  background-color: rgba(239, 68, 68, 0.2) !important;
+  border-color: rgba(239, 68, 68, 0.5) !important;
+  color: #b91c1c !important; /* Even darker red on hover */
+}
+
 /* Right Content Area */
 .content-area {
   flex: 1;
