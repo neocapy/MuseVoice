@@ -247,6 +247,87 @@ html, body {
   width: 48px;
 }
 
+/* Horizontal collapsed mode: sidebar becomes a horizontal top bar */
+.app-container.h-collapsed {
+  flex-direction: column;
+}
+
+.app-container.h-collapsed .content-area {
+  display: none;
+}
+
+.app-container.h-collapsed .sidebar {
+  width: 100%;
+  min-width: 0;
+  height: 48px;
+  flex-direction: row;
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-container.h-collapsed .drag-handle {
+  width: 24px;
+  height: 100%;
+  border-bottom: none;
+  border-right: 1px solid rgba(209, 213, 219, 0.3);
+}
+
+.app-container.h-collapsed .drag-handle::before {
+  width: 3px;
+  height: 16px;
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--text-secondary) 0px,
+    var(--text-secondary) 2px,
+    transparent 2px,
+    transparent 4px
+  );
+}
+
+.app-container.h-collapsed .sidebar-content {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.app-container.h-collapsed #status-canvas {
+  width: 48px;
+  height: 48px;
+}
+
+.app-container.h-collapsed .status-label {
+  max-width: 80px;
+}
+
+.app-container.h-collapsed .mode-toggle {
+  flex-direction: column; /* stack Repl / Clip */
+  align-items: center;
+  justify-content: center; /* vertically center within 48px bar */
+  gap: 2px;
+  padding: 0 6px;
+  border-top: none;
+}
+
+.app-container.h-collapsed .sidebar-controls {
+  flex-direction: column; /* stack Close over Minimize */
+  align-items: center;
+  justify-content: center; /* vertically center within 48px bar */
+  gap: 2px;
+  padding: 0 6px;
+}
+
+/* Ensure order: X on top, then -, retry last if visible */
+.app-container.h-collapsed #close-btn { order: 0; }
+.app-container.h-collapsed #minimize-btn { order: 1; }
+.app-container.h-collapsed #retry-btn { order: 2; }
+
+/* Keep items vertically centered across the bar */
+.app-container.h-collapsed .sidebar {
+  align-items: center;
+}
+
 /* Ensure minimum functionality on very small heights */
 @media (max-height: 199px) {
   .sidebar-content {

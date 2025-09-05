@@ -29,6 +29,7 @@ class MuseVoiceApp {
   
   private SIDEBAR_WIDTH = 48;
   private COLLAPSE_WIDTH = 72;
+  private COLLAPSE_HEIGHT = 72;
   
   constructor() {
     this.canvas = document.getElementById('status-canvas') as HTMLCanvasElement;
@@ -336,16 +337,26 @@ class MuseVoiceApp {
 
   private handleWindowResize(): void {
     const windowWidth = window.innerWidth;
-    const shouldExpand = windowWidth >= this.COLLAPSE_WIDTH;
+    const windowHeight = window.innerHeight;
     
-    if (shouldExpand !== this.isExpanded) {
+    const isHorizontalCollapsed = windowHeight < this.COLLAPSE_HEIGHT;
+    const isVerticalCollapsed = !isHorizontalCollapsed && windowWidth < this.COLLAPSE_WIDTH;
+    const shouldExpand = !isHorizontalCollapsed && !isVerticalCollapsed;
+    
+    if (shouldExpand !== this.isExpanded || isHorizontalCollapsed) {
       this.isExpanded = shouldExpand;
       
-      if (this.isExpanded) {
+      if (shouldExpand) {
         this.appContainer.classList.remove('collapsed');
+        this.appContainer.classList.remove('h-collapsed');
         this.appContainer.classList.add('expanded');
+      } else if (isHorizontalCollapsed) {
+        this.appContainer.classList.remove('expanded');
+        this.appContainer.classList.remove('collapsed');
+        this.appContainer.classList.add('h-collapsed');
       } else {
         this.appContainer.classList.remove('expanded');
+        this.appContainer.classList.remove('h-collapsed');
         this.appContainer.classList.add('collapsed');
       }
     }
@@ -532,8 +543,13 @@ class MuseVoiceApp {
       this.transcriptionTextbox.setSelectionRange(endPosition, endPosition);
     }
     
-    // Auto-expand if collapsed and there's new text (only if window is wide enough)
-    if (!this.isExpanded && text.trim() && window.innerWidth >= this.COLLAPSE_WIDTH) {
+    // Auto-expand if collapsed and there's new text (only if window is large enough)
+    if (
+      !this.isExpanded &&
+      text.trim() &&
+      window.innerWidth >= this.COLLAPSE_WIDTH &&
+      window.innerHeight >= this.COLLAPSE_HEIGHT
+    ) {
       this.handleWindowResize(); // This will expand if window is wide enough
     }
     
