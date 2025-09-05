@@ -88,14 +88,16 @@ pub struct Flow {
     state: Arc<RwLock<FlowState>>,
     callback: FlowCallback,
     cancellation_token: CancellationToken,
+    model: String,
 }
 
 impl Flow {
-    pub fn new(callback: FlowCallback) -> Self {
+    pub fn new(callback: FlowCallback, model: String) -> Self {
         Self {
             state: Arc::new(RwLock::new(FlowState::Idle)),
             callback,
             cancellation_token: CancellationToken::new(),
+            model,
         }
     }
 
@@ -519,7 +521,7 @@ impl Flow {
                         message: format!("Failed to create file part: {}", e),
                     })?,
             )
-            .text("model", "whisper-1");
+            .text("model", self.model.clone());
 
         println!("Sending transcription request to OpenAI...");
 

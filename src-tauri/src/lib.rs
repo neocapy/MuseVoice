@@ -17,6 +17,7 @@ pub struct FlowManager {
     current_flow: Option<Arc<Flow>>,
     stop_sender: Option<oneshot::Sender<()>>,
     retry_wav_data: Option<Vec<u8>>, // Store WAV data for retry functionality
+    model: String,
 }
 
 impl FlowManager {
@@ -25,6 +26,7 @@ impl FlowManager {
             current_flow: None,
             stop_sender: None,
             retry_wav_data: None,
+            model: "whisper-1".to_string(),
         }
     }
 
@@ -89,7 +91,7 @@ impl FlowManager {
         });
 
         // Create and start flow
-        let flow = Arc::new(Flow::new(callback));
+        let flow = Arc::new(Flow::new(callback, self.model.clone()));
         let flow_clone = Arc::clone(&flow);
 
         // Store references
@@ -197,7 +199,7 @@ impl FlowManager {
         });
 
         // Create flow and run transcription only
-        let flow = Arc::new(Flow::new(callback));
+        let flow = Arc::new(Flow::new(callback, self.model.clone()));
         let flow_clone = Arc::clone(&flow);
 
         // Store reference
@@ -310,6 +312,26 @@ async fn retry_transcription(
         Err("Flow manager not initialized".to_string())
     }
 }
+#[tauri::command]
+async fn set_transcription_model(
+    flow_manager: State<'_, FlowManagerState>,
+    model: String,
+) -> Result<String, String> {
+    let mut manager_guard = flow_manager.write().await;
+
+    if let Some(manager) = manager_guard.as_mut() {
+        // Accept only allowed models
+        match model.as_str() {
+            "whisper-1" | "gpt-4o-transcribe" => {
+                manager.model = model;
+                Ok("Model updated".to_string())
+            }
+            _ => Err("Invalid model".to_string()),
+        }
+    } else {
+        Err("Flow manager not initialized".to_string())
+    }
+}
 
 #[tauri::command]
 async fn has_retry_data(flow_manager: State<'_, FlowManagerState>) -> Result<bool, String> {
@@ -347,7 +369,8 @@ pub fn run() {
             cancel_transcription,
             retry_transcription,
             has_retry_data,
-            copy_to_clipboard
+            copy_to_clipboard,
+            set_transcription_model
         ])
         .setup(move |_app| {
             // Initialize the flow manager in an async context

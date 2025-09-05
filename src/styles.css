@@ -130,6 +130,15 @@ html, body {
   border-top: 1px solid rgba(209, 213, 219, 0.3);
 }
 
+/* Model toggle sits above mode-toggle in vertical layout */
+.model-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 4px 0 4px;
+  flex-shrink: 0;
+}
+
 .sidebar-controls {
   display: flex;
   flex-direction: column;
@@ -308,6 +317,14 @@ html, body {
   gap: 2px;
   padding: 0 6px;
   border-top: none;
+}
+
+.app-container.h-collapsed .model-toggle {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center; /* vertically center */
+  gap: 2px;
+  padding: 0 6px;
 }
 
 .app-container.h-collapsed .sidebar-controls {

@@ -16,6 +16,7 @@ class MuseVoiceApp {
   private minimizeBtn: HTMLButtonElement;
   private modeToggleBtn: HTMLButtonElement;
   private autoCopyBtn: HTMLButtonElement;
+  private modelToggleBtn: HTMLButtonElement;
   private retryBtn: HTMLButtonElement;
   private appContainer: HTMLDivElement;
   private isExpanded: boolean = true;
@@ -23,6 +24,7 @@ class MuseVoiceApp {
   private currentStatus: 'loading' | 'ready' | 'recording' | 'processing' = 'loading';
   private insertMode: boolean = false; // false = replace mode, true = insert mode
   private autoCopyEnabled: boolean = true;
+  private model: 'whisper-1' | 'gpt-4o-transcribe' = 'whisper-1';
   private doneAudio: HTMLAudioElement;
 
   private currentSamples: number | null = null;
@@ -39,6 +41,7 @@ class MuseVoiceApp {
     this.minimizeBtn = document.getElementById('minimize-btn') as HTMLButtonElement;
     this.modeToggleBtn = document.getElementById('mode-toggle-btn') as HTMLButtonElement;
     this.autoCopyBtn = document.getElementById('auto-copy-btn') as HTMLButtonElement;
+    this.modelToggleBtn = document.getElementById('model-toggle-btn') as HTMLButtonElement;
     this.retryBtn = document.getElementById('retry-btn') as HTMLButtonElement;
     this.appContainer = document.querySelector('.app-container') as HTMLDivElement;
     
@@ -164,6 +167,8 @@ class MuseVoiceApp {
     
     // Auto-copy toggle button
     this.autoCopyBtn.addEventListener('click', () => this.handleAutoCopyToggle());
+    // Model toggle button
+    this.modelToggleBtn.addEventListener('click', () => this.handleModelToggle());
     
     // Retry button
     this.retryBtn.addEventListener('click', () => this.handleRetryClick());
@@ -246,6 +251,16 @@ class MuseVoiceApp {
       this.autoCopyBtn.style.backgroundColor = 'rgba(99, 102, 241, 0.05)';
       this.autoCopyBtn.style.borderColor = 'rgba(99, 102, 241, 0.2)';
     }
+  }
+
+  private handleModelToggle(): void {
+    this.model = this.model === 'whisper-1' ? 'gpt-4o-transcribe' : 'whisper-1';
+    this.modelToggleBtn.textContent = this.model === 'whisper-1' ? 'whis' : '4o-t';
+    this.modelToggleBtn.title = this.model;
+    // Persist choice for session by informing backend
+    invoke('set_transcription_model', { model: this.model }).catch((e) => {
+      console.error('Failed to set model:', e);
+    });
   }
 
   private async handleRetryClick(): Promise<void> {
