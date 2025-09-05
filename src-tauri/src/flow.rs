@@ -28,6 +28,7 @@ pub enum FlowEvent {
     TranscriptionResult(String),
     WavFileSaved(String), // Path to the saved WAV file
     WavDataReady(Vec<u8>), // WAV buffer ready for transcription (for retry functionality)
+    WaveformChunk { bins: Vec<f32>, avg_rms: f32 },
     Error(String),
 }
 
@@ -295,6 +296,9 @@ impl Flow {
         let mut stop_signal = Some(stop_signal);
         let mut result_receiver = Some(result_receiver);
 
+        // Buffer for emitting periodic waveform chunks (2048 samples -> 128 RMS bins)
+        let mut waveform_buffer: Vec<f32> = Vec::new();
+
         loop {
             tokio::select! {
                 // Receive samples from audio thread
@@ -302,6 +306,29 @@ impl Flow {
                     all_samples.extend_from_slice(&samples);
                     sample_count += samples.len();
                     callback(FlowEvent::SampleCount(sample_count));
+
+                    // Accumulate into waveform buffer and emit chunks of 2048 samples
+                    waveform_buffer.extend_from_slice(&samples);
+                    while waveform_buffer.len() >= 2048 {
+                        // Compute 128 RMS bins (groups of 16 samples)
+                        let mut bins: Vec<f32> = Vec::with_capacity(128);
+                        let mut sum_rms: f32 = 0.0;
+                        for i in 0..128 {
+                            let start = i * 16;
+                            let mut sumsq: f32 = 0.0;
+                            for j in 0..16 {
+                                let v = waveform_buffer[start + j];
+                                sumsq += v * v;
+                            }
+                            let rms = (sumsq / 16.0).sqrt();
+                            bins.push(rms);
+                            sum_rms += rms;
+                        }
+                        let avg_rms = sum_rms / 128.0;
+                        callback(FlowEvent::WaveformChunk { bins, avg_rms });
+                        // Drain the processed 2048 samples
+                        waveform_buffer.drain(0..2048);
+                    }
                 }
 
                 // Stop signal received

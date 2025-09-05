@@ -28,6 +28,8 @@ class MuseVoiceApp {
   private doneAudio: HTMLAudioElement;
 
   private currentSamples: number | null = null;
+  private waveformBins: number[] = [];
+  private waveformAvgRms: number = 0;
   
   private SIDEBAR_WIDTH = 48;
   private COLLAPSE_WIDTH = 72;
@@ -80,6 +82,17 @@ class MuseVoiceApp {
         this.currentSamples = event.payload;
         if (this.currentStatus === 'recording') {
           this.setStatus('recording'); // This will update the display with new sample count
+        }
+      });
+
+      // Listen for waveform chunks
+      await listen('waveform-chunk', (event: any) => {
+        const payload = event.payload as { bins: number[]; avgRms?: number; avg_rms?: number };
+        if (!payload || !payload.bins) return;
+        this.waveformBins = payload.bins;
+        this.waveformAvgRms = (payload as any).avg_rms ?? payload.avgRms ?? 0;
+        if (this.currentStatus === 'recording') {
+          this.drawStatusButton();
         }
       });
       
@@ -255,7 +268,7 @@ class MuseVoiceApp {
 
   private handleModelToggle(): void {
     this.model = this.model === 'whisper-1' ? 'gpt-4o-transcribe' : 'whisper-1';
-    this.modelToggleBtn.textContent = this.model === 'whisper-1' ? 'whis' : '4o-t';
+    this.modelToggleBtn.textContent = this.model === 'whisper-1' ? 'Whis' : '4o-t';
     this.modelToggleBtn.title = this.model;
     // Persist choice for session by informing backend
     invoke('set_transcription_model', { model: this.model }).catch((e) => {
@@ -484,21 +497,90 @@ class MuseVoiceApp {
     this.ctx.lineWidth = 2;
     this.ctx.stroke();
     
-    // Draw icon based on status
-    this.ctx.fillStyle = 'white';
-    this.ctx.strokeStyle = 'white';
-    this.ctx.lineWidth = 2;
-    
+    // Draw icon or waveform based on status
     if (this.currentStatus === 'ready') {
+      this.ctx.fillStyle = 'white';
+      this.ctx.strokeStyle = 'white';
+      this.ctx.lineWidth = 2;
       // Draw microphone icon
       this.drawMicrophoneIcon(center);
     } else if (this.currentStatus === 'recording') {
-      // Draw stop square
-      this.ctx.fillRect(center - 6, center - 6, 12, 12);
+      this.drawRecordingWaveform(center, radius);
     } else if (this.currentStatus === 'processing') {
-      // Draw spinning dots or processing indicator
+      this.ctx.fillStyle = 'white';
+      this.ctx.strokeStyle = 'white';
+      this.ctx.lineWidth = 2;
       this.drawProcessingIcon(center);
     }
+  }
+
+  private drawRecordingWaveform(center: number, radius: number): void {
+    const ctx = this.ctx;
+    const bins = this.waveformBins && this.waveformBins.length > 0 ? this.waveformBins : new Array(128).fill(0);
+    const rmsToDbScale = (r: number): number => {
+      const eps = 1e-8;
+      const db = 20 * Math.log10(Math.max(r, eps));
+      const t = (db + 30) / 30; // -30 dB -> 0, 0 dB -> 1
+      return Math.max(0, Math.min(1, t));
+    };
+    const avg = rmsToDbScale(this.waveformAvgRms || 0);
+
+    // Colors
+    const bgBase = { r: 243, g: 233, b: 233 }; // gray-100
+    const bgHot = { r: 254, g: 182, b: 182 }; // red-200
+    const ringBase = { r: 254, g: 202, b: 202 }; // red-200
+    const ringHot = { r: 185, g: 28, b: 28 }; // red-700
+    const mix = (a: number, b: number, t: number) => Math.round(a + (b - a) * t);
+    const bg = `rgb(${mix(bgBase.r, bgHot.r, avg)}, ${mix(bgBase.g, bgHot.g, avg)}, ${mix(bgBase.b, bgHot.b, avg)})`;
+    const ring = `rgb(${mix(ringBase.r, ringHot.r, avg)}, ${mix(ringBase.g, ringHot.g, avg)}, ${mix(ringBase.b, ringHot.b, avg)})`;
+
+    // Redraw circle background with dynamic fill
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(center, center, radius, 0, 2 * Math.PI);
+    ctx.fillStyle = bg;
+    ctx.fill();
+    ctx.strokeStyle = ring;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Clip to circle to avoid drawing outside
+    ctx.clip();
+
+    // Draw filled waveform as symmetric area around center
+    const padding = 2; // keep inside border
+    const innerR = radius - padding;
+    const N = bins.length;
+    const leftX = center - innerR;
+    const width = innerR * 2;
+    const step = width / Math.max(1, N - 1);
+    const minHalfPx = 1; // ensure minimum 2px thickness total
+
+    // Build path top edge
+    ctx.beginPath();
+    for (let i = 0; i < N; i++) {
+      const x = leftX + i * step;
+      const amp = rmsToDbScale(Math.max(bins[i], 0));
+      const half = Math.max(minHalfPx, amp * innerR); // ensure minimum 2px thickness total
+      const yTop = center - half;
+      if (i === 0) ctx.moveTo(x, yTop);
+      else ctx.lineTo(x, yTop);
+    }
+    // Bottom edge in reverse
+    for (let i = N - 1; i >= 0; i--) {
+      const x = leftX + i * step;
+      const amp = rmsToDbScale(Math.max(bins[i], 0));
+      const half = Math.max(minHalfPx, amp * innerR);
+      const yBot = center + half;
+      ctx.lineTo(x, yBot);
+    }
+    ctx.closePath();
+    ctx.fillStyle = 'rgb(255, 0, 0)';
+    ctx.globalAlpha = 0.9;
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
+
+    ctx.restore();
   }
 
   private drawMicrophoneIcon(center: number): void {

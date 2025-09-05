@@ -47,6 +47,10 @@ impl FlowManager {
             FlowEvent::SampleCount(count) => {
                 let _ = app_handle_clone.emit("sample-count", count);
             }
+            FlowEvent::WaveformChunk { bins, avg_rms } => {
+                let payload = WaveformChunkPayload { bins, avg_rms };
+                let _ = app_handle_clone.emit("waveform-chunk", payload);
+            }
             FlowEvent::TranscriptionResult(text) => {
                 // Clear retry data on successful transcription
                 if let Some(manager_arc) = flow_manager_weak.upgrade() {
@@ -220,6 +224,12 @@ impl FlowManager {
 pub struct StatusResponse {
     pub state: FlowState,
     pub samples: Option<usize>,
+}
+
+#[derive(Serialize, Clone)]
+struct WaveformChunkPayload {
+    bins: Vec<f32>,
+    avg_rms: f32,
 }
 
 #[tauri::command]
