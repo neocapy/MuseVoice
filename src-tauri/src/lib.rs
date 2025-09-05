@@ -6,7 +6,7 @@ mod flow;
 use flow::{Flow, FlowCallback, FlowEvent, FlowState};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, State, Manager};
 use tokio::sync::{oneshot, RwLock};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -382,7 +382,28 @@ pub fn run() {
             copy_to_clipboard,
             set_transcription_model
         ])
-        .setup(move |_app| {
+        .setup(move |app| {
+            // Set platform-specific default window size at startup
+            if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "windows")]
+                {
+                    // Horizontal collapse condition (min height) with width = 200 px
+                    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                        width: 250.0,
+                        height: 48.0,
+                    }));
+                }
+
+                #[cfg(not(target_os = "windows"))]
+                {
+                    // Vertical collapse condition (min width) with height = 200 px
+                    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                        width: 48.0,
+                        height: 300.0,
+                    }));
+                }
+            }
+
             // Initialize the flow manager in an async context
             let flow_manager_clone = flow_manager.clone();
             tauri::async_runtime::spawn(async move {
