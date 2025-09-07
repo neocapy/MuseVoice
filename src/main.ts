@@ -17,6 +17,7 @@ class MuseVoiceApp {
   private modeToggleBtn: HTMLButtonElement;
   private autoCopyBtn: HTMLButtonElement;
   private modelToggleBtn: HTMLButtonElement;
+  private rawChatToggleBtn: HTMLButtonElement;
   private retryBtn: HTMLButtonElement;
   private appContainer: HTMLDivElement;
   private isExpanded: boolean = true;
@@ -25,6 +26,7 @@ class MuseVoiceApp {
   private insertMode: boolean = false; // false = replace mode, true = insert mode
   private autoCopyEnabled: boolean = true;
   private model: 'whisper-1' | 'gpt-4o-transcribe' = 'whisper-1';
+  private rawChatMode: 'raw' | 'chat' = 'raw'; // raw = current behavior, chat = remove trailing punctuation
   private doneAudio: HTMLAudioElement;
 
   private currentSamples: number | null = null;
@@ -44,6 +46,7 @@ class MuseVoiceApp {
     this.modeToggleBtn = document.getElementById('mode-toggle-btn') as HTMLButtonElement;
     this.autoCopyBtn = document.getElementById('auto-copy-btn') as HTMLButtonElement;
     this.modelToggleBtn = document.getElementById('model-toggle-btn') as HTMLButtonElement;
+    this.rawChatToggleBtn = document.getElementById('raw-chat-toggle-btn') as HTMLButtonElement;
     this.retryBtn = document.getElementById('retry-btn') as HTMLButtonElement;
     this.appContainer = document.querySelector('.app-container') as HTMLDivElement;
     
@@ -182,6 +185,8 @@ class MuseVoiceApp {
     this.autoCopyBtn.addEventListener('click', () => this.handleAutoCopyToggle());
     // Model toggle button
     this.modelToggleBtn.addEventListener('click', () => this.handleModelToggle());
+    // RAW/CHAT toggle button
+    this.rawChatToggleBtn.addEventListener('click', () => this.handleRawChatToggle());
     
     // Retry button
     this.retryBtn.addEventListener('click', () => this.handleRetryClick());
@@ -276,6 +281,12 @@ class MuseVoiceApp {
     });
   }
 
+  private handleRawChatToggle(): void {
+    this.rawChatMode = this.rawChatMode === 'raw' ? 'chat' : 'raw';
+    this.rawChatToggleBtn.textContent = this.rawChatMode === 'raw' ? 'Raw' : 'Chat';
+    this.rawChatToggleBtn.title = this.rawChatMode === 'raw' ? 'Raw mode (Click to switch to Chat)' : 'Chat mode (Click to switch to Raw)';
+  }
+
   private async handleRetryClick(): Promise<void> {
     try {
       this.setStatus('processing');
@@ -350,6 +361,12 @@ class MuseVoiceApp {
       text: processedText, 
       adjustedPosition: insertPosition + positionAdjustment 
     };
+  }
+
+  private removeTrailingPunctuation(text: string): string {
+    // Remove trailing punctuation (periods, exclamation points, question marks, etc.)
+    // while preserving internal punctuation and whitespace structure
+    return text.replace(/[.!?;,]*\s*$/, '').trimEnd();
   }
 
   private handleTextboxChange(_event: Event): void {
@@ -614,29 +631,36 @@ class MuseVoiceApp {
 
   public updateTranscription(text: string): void {
     // Clear retry data on successful transcription is now handled by backend
+    
+    // Apply CHAT mode post-processing if enabled
+    let processedText = text;
+    if (this.rawChatMode === 'chat') {
+      processedText = this.removeTrailingPunctuation(text);
+    }
+    
     if (this.insertMode) {
       // Insert mode: insert at current cursor position with smart spacing
       const currentText = this.transcriptionTextbox.value;
       const cursorPosition = this.transcriptionTextbox.selectionStart || 0;
       
       // Apply smart spacing
-      const { text: processedText, adjustedPosition } = this.addSmartSpacing(text, cursorPosition, currentText);
+      const { text: spacedText, adjustedPosition } = this.addSmartSpacing(processedText, cursorPosition, currentText);
       
       // Insert the text at cursor position
       const beforeCursor = currentText.substring(0, cursorPosition);
       const afterCursor = currentText.substring(cursorPosition);
-      const newText = beforeCursor + processedText + afterCursor;
+      const newText = beforeCursor + spacedText + afterCursor;
       
       this.transcriptionTextbox.value = newText;
       
       // Position cursor at end of inserted text
-      const newCursorPosition = adjustedPosition + processedText.length;
+      const newCursorPosition = adjustedPosition + spacedText.length;
       this.transcriptionTextbox.setSelectionRange(newCursorPosition, newCursorPosition);
     } else {
       // Replace mode: replace all text (original behavior)
-      this.transcriptionTextbox.value = text;
+      this.transcriptionTextbox.value = processedText;
       // Position cursor at end of text
-      const endPosition = text.length;
+      const endPosition = processedText.length;
       this.transcriptionTextbox.setSelectionRange(endPosition, endPosition);
     }
     
