@@ -6,22 +6,23 @@ use rubato::{
 use std::io::Cursor;
 use std::time::Instant;
 
-/// Resamples audio data to 16kHz and encodes it as a WAV file in memory
+/// Resamples audio data to the specified sample rate and encodes it as a WAV file in memory
 ///
 /// # Arguments
 /// * `recording` - The RecordingData containing samples and original sample rate
+/// * `target_sample_rate` - The desired output sample rate in Hz
 ///
 /// # Returns
 /// * `Result<Vec<u8>, Box<dyn std::error::Error>>` - WAV file data as bytes or error
 pub fn resample_and_encode_wav(
     recording: RecordingData,
+    target_sample_rate: u32,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let target_sample_rate = 24000u32;
     let original_sample_rate = recording.sample_rate;
 
     // If already at target sample rate, skip resampling
     let resampled_samples = if original_sample_rate == target_sample_rate {
-        println!("Audio already at target sample rate (24kHz), skipping resampling");
+        println!("Audio already at target sample rate ({}Hz), skipping resampling", target_sample_rate);
         recording.samples
     } else {
         println!("Resampling from {}Hz to {}Hz...", original_sample_rate, target_sample_rate);

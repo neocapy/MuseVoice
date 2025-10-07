@@ -30,6 +30,9 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 tauri-plugin-clipboard-manager = "2"
 
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-global-shortcut = "2.3.0"
+
 # Optimize development builds slightly for better performance
 [profile.dev]
 opt-level = 2

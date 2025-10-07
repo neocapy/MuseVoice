@@ -180,7 +180,7 @@ impl Flow {
 
         // Encode audio (sync operation, but fast)
         let wav_data = match tokio::task::spawn_blocking(move || {
-            crate::encode::resample_and_encode_wav(recording_data.into()).map_err(|e| e.to_string())
+            crate::encode::resample_and_encode_wav(recording_data.into(), 24000u32).map_err(|e| e.to_string())
         })
         .await
         {
