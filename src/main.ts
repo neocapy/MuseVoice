@@ -18,7 +18,7 @@ class MuseVoiceApp {
   private closeBtn: HTMLButtonElement;
   private minimizeBtn: HTMLButtonElement;
   private modeToggleBtn: HTMLButtonElement;
-  private autoCopyBtn: HTMLButtonElement;
+  private rewriteToggleBtn: HTMLButtonElement;
   private modelToggleBtn: HTMLButtonElement;
   private rawChatToggleBtn: HTMLButtonElement;
   private retryBtn: HTMLButtonElement;
@@ -27,7 +27,7 @@ class MuseVoiceApp {
   private dpr: number = window.devicePixelRatio || 1;
   private currentStatus: 'loading' | 'ready' | 'recording' | 'processing' = 'loading';
   private insertMode: boolean = false; // false = replace mode, true = insert mode
-  private autoCopyEnabled: boolean = true;
+  private rewriteEnabled: boolean = false;
   private model: 'whisper-1' | 'gpt-4o-transcribe' = 'whisper-1';
   private rawChatMode: 'raw' | 'chat' = 'raw'; // raw = current behavior, chat = remove trailing punctuation
   private doneAudio: HTMLAudioElement;
@@ -55,7 +55,7 @@ class MuseVoiceApp {
     this.closeBtn = document.getElementById('close-btn') as HTMLButtonElement;
     this.minimizeBtn = document.getElementById('minimize-btn') as HTMLButtonElement;
     this.modeToggleBtn = document.getElementById('mode-toggle-btn') as HTMLButtonElement;
-    this.autoCopyBtn = document.getElementById('auto-copy-btn') as HTMLButtonElement;
+    this.rewriteToggleBtn = document.getElementById('auto-copy-btn') as HTMLButtonElement;
     this.modelToggleBtn = document.getElementById('model-toggle-btn') as HTMLButtonElement;
     this.rawChatToggleBtn = document.getElementById('raw-chat-toggle-btn') as HTMLButtonElement;
     this.retryBtn = document.getElementById('retry-btn') as HTMLButtonElement;
@@ -111,6 +111,9 @@ class MuseVoiceApp {
     this.handleWindowResize(); // Initial check
     this.setupBackendEventListeners();
     this.checkInitialRetryData(); // Check if there's existing retry data
+    
+    // Initialize button states
+    this.initializeButtonStates();
   }
 
   private async setupBackendEventListeners(): Promise<void> {
@@ -234,7 +237,7 @@ class MuseVoiceApp {
     this.modeToggleBtn.addEventListener('click', () => this.handleModeToggle());
     
     // Auto-copy toggle button
-    this.autoCopyBtn.addEventListener('click', () => this.handleAutoCopyToggle());
+    this.rewriteToggleBtn.addEventListener('click', () => this.handleRewriteToggle());
     // Model toggle button
     this.modelToggleBtn.addEventListener('click', () => this.handleModelToggle());
     // RAW/CHAT toggle button
@@ -308,19 +311,22 @@ class MuseVoiceApp {
     this.modeToggleBtn.title = this.insertMode ? 'Insert Mode (Click to switch to Replace)' : 'Replace Mode (Click to switch to Insert)';
   }
 
-  private handleAutoCopyToggle(): void {
-    this.autoCopyEnabled = !this.autoCopyEnabled;
-    this.autoCopyBtn.textContent = this.autoCopyEnabled ? 'Clip' : 'Local';
-    this.autoCopyBtn.title = this.autoCopyEnabled ? 'Auto-copy enabled (Click to disable)' : 'Auto-copy disabled (Click to enable)';
+  private handleRewriteToggle(): void {
+    this.rewriteEnabled = !this.rewriteEnabled;
+    this.rewriteToggleBtn.textContent = this.rewriteEnabled ? 'Re' : 'No';
+    this.rewriteToggleBtn.title = this.rewriteEnabled ? 'Rewrite enabled (Click to disable)' : 'Rewrite disabled (Click to enable)';
     
     // Update button styling to indicate state
-    if (this.autoCopyEnabled) {
-      this.autoCopyBtn.style.backgroundColor = 'rgba(99, 102, 241, 0.2)';
-      this.autoCopyBtn.style.borderColor = 'rgba(99, 102, 241, 0.6)';
+    if (this.rewriteEnabled) {
+      this.rewriteToggleBtn.style.backgroundColor = 'rgba(99, 102, 241, 0.2)';
+      this.rewriteToggleBtn.style.borderColor = 'rgba(99, 102, 241, 0.6)';
     } else {
-      this.autoCopyBtn.style.backgroundColor = 'rgba(99, 102, 241, 0.05)';
-      this.autoCopyBtn.style.borderColor = 'rgba(99, 102, 241, 0.2)';
+      this.rewriteToggleBtn.style.backgroundColor = 'rgba(99, 102, 241, 0.05)';
+      this.rewriteToggleBtn.style.borderColor = 'rgba(99, 102, 241, 0.2)';
     }
+    
+    // Send the new rewrite setting to the backend
+    this.setRewriteEnabled(this.rewriteEnabled);
   }
 
   private handleModelToggle(): void {
@@ -512,7 +518,7 @@ class MuseVoiceApp {
   }
 
   private async copyToClipboard(text: string): Promise<void> {
-    if (!this.autoCopyEnabled || !text.trim()) {
+    if (!text.trim()) {
       return;
     }
     
@@ -570,14 +576,36 @@ class MuseVoiceApp {
   }
 
   private handleTextboxChange(_event: Event): void {
-    // Copy to clipboard if auto-copy is enabled
-    if (this.autoCopyEnabled) {
-      this.copyToClipboard(this.transcriptionTextbox.value);
-    }
+    // Always copy to clipboard (removed toggle functionality)
+    this.copyToClipboard(this.transcriptionTextbox.value);
   }
 
   private handleTextboxKeydown(_event: KeyboardEvent): void {
     // Empty as requested
+  }
+
+  private initializeButtonStates(): void {
+    // Set initial rewrite toggle button state
+    this.rewriteToggleBtn.textContent = this.rewriteEnabled ? 'Re' : 'No';
+    this.rewriteToggleBtn.title = this.rewriteEnabled ? 'Rewrite enabled (Click to disable)' : 'Rewrite disabled (Click to enable)';
+    
+    // Update button styling to indicate state
+    if (this.rewriteEnabled) {
+      this.rewriteToggleBtn.style.backgroundColor = 'rgba(99, 102, 241, 0.2)';
+      this.rewriteToggleBtn.style.borderColor = 'rgba(99, 102, 241, 0.6)';
+    } else {
+      this.rewriteToggleBtn.style.backgroundColor = 'rgba(99, 102, 241, 0.05)';
+      this.rewriteToggleBtn.style.borderColor = 'rgba(99, 102, 241, 0.2)';
+    }
+  }
+
+  private async setRewriteEnabled(enabled: boolean): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_rewrite_enabled', { enabled });
+    } catch (error) {
+      console.error('Failed to set rewrite enabled:', error);
+    }
   }
 
   private handleWindowResize(): void {
@@ -874,10 +902,8 @@ class MuseVoiceApp {
       this.handleWindowResize(); // This will expand if window is wide enough
     }
     
-    // Copy to clipboard if auto-copy is enabled
-    if (this.autoCopyEnabled) {
-      this.copyToClipboard(this.transcriptionTextbox.value);
-    }
+    // Always copy to clipboard (removed toggle functionality)
+    this.copyToClipboard(this.transcriptionTextbox.value);
   }
 
   public getTranscriptionText(): string {

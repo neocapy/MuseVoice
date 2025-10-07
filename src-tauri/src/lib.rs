@@ -123,6 +123,21 @@ async fn set_transcription_model(
 }
 
 #[tauri::command]
+async fn set_rewrite_enabled(
+    flow_manager: State<'_, FlowManagerState>,
+    enabled: bool,
+) -> Result<String, String> {
+    let mut manager_guard = flow_manager.write().await;
+
+    if let Some(manager) = manager_guard.as_mut() {
+        manager.set_rewrite_enabled(enabled);
+        Ok("Rewrite setting updated".to_string())
+    } else {
+        Err("Flow manager not initialized".to_string())
+    }
+}
+
+#[tauri::command]
 async fn has_retry_data(flow_manager: State<'_, FlowManagerState>) -> Result<bool, String> {
     let manager_guard = flow_manager.read().await;
 
@@ -252,7 +267,8 @@ pub fn run() {
             retry_transcription,
             has_retry_data,
             copy_to_clipboard,
-            set_transcription_model
+            set_transcription_model,
+            set_rewrite_enabled
         ])
         .setup(move |app| {
             // Setup global shortcut for desktop platforms

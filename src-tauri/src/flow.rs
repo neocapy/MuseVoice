@@ -92,16 +92,18 @@ pub struct Flow {
     cancellation_token: CancellationToken,
     model: String,
     origin: String,
+    rewrite_enabled: bool,
 }
 
 impl Flow {
-    pub fn new(callback: FlowCallback, model: String, origin: String) -> Self {
+    pub fn new(callback: FlowCallback, model: String, origin: String, rewrite_enabled: bool) -> Self {
         Self {
             state: Arc::new(RwLock::new(FlowState::Idle)),
             callback,
             cancellation_token: CancellationToken::new(),
             model,
             origin,
+            rewrite_enabled,
         }
     }
 
@@ -229,9 +231,25 @@ impl Flow {
 
         // Transcribe with OpenAI
         match self.transcribe_audio(wav_data).await {
-            Ok(text) => {
+            Ok(mut transcribed_text) => {
+                // Apply rewriting if enabled
+                if self.rewrite_enabled {
+                    println!("Rewrite enabled, attempting to rewrite transcribed text...");
+                    match self.rewrite_transcribed_text(&transcribed_text).await {
+                        Ok(rewritten_text) => {
+                            println!("Rewrite successful");
+                            transcribed_text = rewritten_text;
+                        }
+                        Err(e) => {
+                            // Soft fail: just print error and continue with original text
+                            eprintln!("Rewrite failed, using original transcription: {}", e.message);
+                            // Could emit a status event here for the UI to show rewrite failed
+                        }
+                    }
+                }
+                
                 self.set_state(FlowState::Completed).await;
-                self.emit_event(FlowEvent::TranscriptionResult(text));
+                self.emit_event(FlowEvent::TranscriptionResult(transcribed_text));
                 Ok(())
             }
             Err(e) => {
@@ -257,9 +275,25 @@ impl Flow {
 
         // Transcribe with OpenAI
         match self.transcribe_audio(wav_data).await {
-            Ok(text) => {
+            Ok(mut transcribed_text) => {
+                // Apply rewriting if enabled
+                if self.rewrite_enabled {
+                    println!("Rewrite enabled, attempting to rewrite transcribed text...");
+                    match self.rewrite_transcribed_text(&transcribed_text).await {
+                        Ok(rewritten_text) => {
+                            println!("Rewrite successful");
+                            transcribed_text = rewritten_text;
+                        }
+                        Err(e) => {
+                            // Soft fail: just print error and continue with original text
+                            eprintln!("Rewrite failed, using original transcription: {}", e.message);
+                            // Could emit a status event here for the UI to show rewrite failed
+                        }
+                    }
+                }
+                
                 self.set_state(FlowState::Completed).await;
-                self.emit_event(FlowEvent::TranscriptionResult(text));
+                self.emit_event(FlowEvent::TranscriptionResult(transcribed_text));
                 Ok(())
             }
             Err(e) => {
@@ -531,6 +565,130 @@ impl Flow {
         })();
 
         let _ = result_sender.send(result);
+    }
+
+    /// Rewrite transcribed text using GPT-5 to handle dictation issues
+    /// (phonetic alphabet, punctuation, formatting commands, etc.)
+    async fn rewrite_transcribed_text(&self, transcribed_text: &str) -> Result<String, AudioError> {
+        let api_key = env::var("OPENAI_API_KEY").map_err(|_| AudioError {
+            message: "OPENAI_API_KEY environment variable not set".to_string(),
+        })?;
+
+        if api_key.trim().is_empty() {
+            return Err(AudioError {
+                message: "OPENAI_API_KEY is empty".to_string(),
+            });
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .map_err(|e| AudioError {
+                message: format!("Failed to create HTTP client: {}", e),
+            })?;
+
+        // Construct the rewrite prompt
+        let rewrite_prompt = format!(
+            "Please fix and rewrite the following dictated text to handle common speech-to-text issues:\n\
+            - Convert phonetic alphabet spelling (alpha bravo charlie) to actual letters (\"ABC\"); choose upper or lowercase based on context\n\
+            - When appropriate, convert spoken numbers to numerals: \"one two three\" → \"123\"\n\
+            - Replace spoken punctuation words with actual punctuation (\"comma\" → \",\", \"period\" → \".\", \"question mark\" → \"?\", etc.)\n\
+            - Handle formatting commands (\"camel case whatever\" → \"camelCase\", \"title case whatever\" → \"TitleCase\", etc.)\n\
+            - \"new paragraph\" → \"\n\n\"\n\
+            - \"new line\" → \"\n\"\n\
+            - \"no space hello there\" -> \"hellothere\"\n\
+            - Fix any other obvious dictation artifacts\n\
+            \n\
+            Original text: {}\n\
+            \n\
+            Return ONLY the corrected text, no explanations or formatting:", 
+            transcribed_text
+        );
+
+        let request_body = serde_json::json!({
+            "model": "gpt-5",
+            "input": rewrite_prompt,
+            "reasoning": {
+                "effort": "minimal"
+            },
+            "max_output_tokens": 16384,
+            "service_tier": "priority"
+        });
+
+        println!("Sending rewrite request to GPT-5...");
+
+        let request_future = client
+            .post("https://api.openai.com/v1/responses")
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&request_body)
+            .send();
+
+        // Wait for either response or cancellation
+        let response = tokio::select! {
+            result = request_future => {
+                result.map_err(|e| AudioError { message: format!("Failed to send rewrite request: {}", e) })?
+            }
+            _ = self.cancellation_token.cancelled() => {
+                return Err(AudioError { message: "Rewrite cancelled".to_string() });
+            }
+        };
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(AudioError {
+                message: format!("GPT-5 API error {}: {}", status, error_text),
+            });
+        }
+
+        #[derive(Deserialize)]
+        struct GPTResponse {
+            output: Vec<GPTOutputItem>,
+        }
+
+        #[derive(Deserialize)]
+        struct GPTOutputItem {
+            #[serde(rename = "type")]
+            output_type: String,
+            content: Option<Vec<GPTContentItem>>, // Optional because reasoning items don't have content
+        }
+
+        #[derive(Deserialize)]
+        struct GPTContentItem {
+            text: String,
+        }
+
+        // Get the raw response text first for debugging
+        let response_text = response.text().await.map_err(|e| AudioError {
+            message: format!("Failed to get response text: {}", e),
+        })?;
+        
+        println!("Raw GPT-5 response: {}", response_text);
+        
+        // Try to parse it
+        let gpt_response: GPTResponse = serde_json::from_str(&response_text).map_err(|e| AudioError {
+            message: format!("Failed to parse rewrite response: {} | Raw response: {}", e, response_text),
+        })?;
+
+        // Extract the rewritten text from the response structure
+        // Find the "message" type output item and get its content
+        let rewritten_text = gpt_response
+            .output
+            .iter()
+            .find(|item| item.output_type == "message")
+            .and_then(|item| item.content.as_ref())
+            .and_then(|content| content.first())
+            .map(|content| content.text.clone())
+            .unwrap_or_else(|| {
+                eprintln!("Could not extract text from GPT-5 response, using original");
+                transcribed_text.to_string()
+            });
+
+        Ok(rewritten_text)
     }
 
     async fn transcribe_audio(&self, wav_data: Vec<u8>) -> Result<String, AudioError> {

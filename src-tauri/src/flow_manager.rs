@@ -12,6 +12,7 @@ pub struct FlowManager {
     stop_sender: Option<oneshot::Sender<()>>,
     retry_wav_data: Option<Vec<u8>>, // Store WAV data for retry functionality
     model: String,
+    rewrite_enabled: bool,
 }
 
 impl FlowManager {
@@ -21,6 +22,7 @@ impl FlowManager {
             stop_sender: None,
             retry_wav_data: None,
             model: "whisper-1".to_string(),
+            rewrite_enabled: false,
         }
     }
 
@@ -92,7 +94,7 @@ impl FlowManager {
         });
 
         // Create and start flow
-        let flow = Arc::new(Flow::new(callback, self.model.clone(), origin.clone()));
+        let flow = Arc::new(Flow::new(callback, self.model.clone(), origin.clone(), self.rewrite_enabled));
         let flow_clone = Arc::clone(&flow);
 
         // Store references
@@ -203,7 +205,7 @@ impl FlowManager {
         });
 
         // Create flow and run transcription only
-        let flow = Arc::new(Flow::new(callback, self.model.clone(), origin.clone()));
+        let flow = Arc::new(Flow::new(callback, self.model.clone(), origin.clone(), self.rewrite_enabled));
         let flow_clone = Arc::clone(&flow);
 
         // Store reference
@@ -228,6 +230,10 @@ impl FlowManager {
             }
             _ => Err("Invalid model".to_string()),
         }
+    }
+
+    pub fn set_rewrite_enabled(&mut self, enabled: bool) {
+        self.rewrite_enabled = enabled;
     }
 }
 
