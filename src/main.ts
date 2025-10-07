@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import doneSound from "./done.wav";
+import boowompSound from "./sounds/boowomp.mp3";
+import bambooHitSound from "./sounds/bamboo_hit.mp3";
+import pipeSound from "./sounds/pipe.mp3";
 
 interface StatusResponse {
   state: 'idle' | 'recording' | 'processing' | 'completed' | 'error' | 'cancelled';
@@ -28,6 +31,14 @@ class MuseVoiceApp {
   private model: 'whisper-1' | 'gpt-4o-transcribe' = 'whisper-1';
   private rawChatMode: 'raw' | 'chat' = 'raw'; // raw = current behavior, chat = remove trailing punctuation
   private doneAudio: HTMLAudioElement;
+  private boowompAudio: HTMLAudioElement;
+  private bambooHitAudio: HTMLAudioElement;
+  private pipeAudio: HTMLAudioElement;
+  
+  // Audio playback state tracking
+  private lastAudioPlayTime: Map<string, number> = new Map();
+  private audioPlayCount: Map<string, number> = new Map();
+  private readonly AUDIO_DEBOUNCE_MS = 150; // Prevent rapid duplicate plays
 
   private currentSamples: number | null = null;
   private waveformBins: number[] = [];
@@ -52,11 +63,44 @@ class MuseVoiceApp {
     
     this.ctx = this.canvas.getContext('2d')!;
     
-    // Initialize audio
-    this.doneAudio = new Audio(doneSound);
-    this.doneAudio.preload = 'auto';
+    // Initialize audio with enhanced loading
+    this.doneAudio = this.createAudioElement(doneSound, 'done.wav');
+    this.boowompAudio = this.createAudioElement(boowompSound, 'boowomp.mp3');
+    this.bambooHitAudio = this.createAudioElement(bambooHitSound, 'bamboo_hit.mp3');
+    this.pipeAudio = this.createAudioElement(pipeSound, 'pipe.mp3');
     
     this.init();
+  }
+
+  private createAudioElement(src: string, name: string): HTMLAudioElement {
+    console.log(`🎵 Initializing audio element: ${name}`);
+    const audio = new Audio(src);
+    
+    // Enhanced preloading settings
+    audio.preload = 'auto';
+    audio.volume = 1.0;
+    
+    // Add event listeners for debugging
+    audio.addEventListener('loadstart', () => {
+      console.log(`🔄 [${name}] Load started`);
+    });
+    
+    audio.addEventListener('canplaythrough', () => {
+      console.log(`✅ [${name}] Can play through (duration: ${audio.duration?.toFixed(2)}s)`);
+    });
+    
+    audio.addEventListener('error', (e) => {
+      console.error(`❌ [${name}] Audio error:`, e);
+    });
+    
+    audio.addEventListener('loadeddata', () => {
+      console.log(`📊 [${name}] Data loaded (readyState: ${audio.readyState})`);
+    });
+    
+    // Trigger initial load
+    audio.load();
+    
+    return audio;
   }
 
   private init(): void {
@@ -119,6 +163,14 @@ class MuseVoiceApp {
       await listen('retry-available', (event: any) => {
         console.log('Retry available:', event.payload);
         this.setRetryButtonVisibility(event.payload);
+      });
+      
+      // Listen for audio feedback events
+      await listen('audio-feedback', (event: any) => {
+        console.log('Audio feedback:', event.payload);
+        this.playAudioFeedback(event.payload).catch(error => {
+          console.error('Audio feedback handler error:', error);
+        });
       });
       
       console.log('Backend event listeners set up');
@@ -290,7 +342,7 @@ class MuseVoiceApp {
   private async handleRetryClick(): Promise<void> {
     try {
       this.setStatus('processing');
-      const result: string = await invoke('retry_transcription');
+      const result: string = await invoke('retry_transcription', { origin: 'click' });
       console.log('Retry started:', result);
     } catch (error) {
       console.error('Failed to retry transcription:', error);
@@ -308,6 +360,154 @@ class MuseVoiceApp {
       this.setRetryButtonVisibility(hasRetryData);
     } catch (error) {
       console.error('Failed to check initial retry data:', error);
+    }
+  }
+
+  private async playAudioFeedback(soundFile: string): Promise<void> {
+    const startTime = performance.now();
+    const playId = `${soundFile}-${Date.now()}`;
+    
+    console.log(`🎵 [${playId}] Audio feedback request: ${soundFile}`);
+    
+    try {
+      // Get audio element
+      let audio: HTMLAudioElement;
+      switch (soundFile) {
+        case 'boowomp.mp3':
+          audio = this.boowompAudio;
+          break;
+        case 'bamboo_hit.mp3':
+          audio = this.bambooHitAudio;
+          break;
+        case 'pipe.mp3':
+          audio = this.pipeAudio;
+          break;
+        default:
+          console.warn(`❌ [${playId}] Unknown audio feedback sound: ${soundFile}`);
+          return;
+      }
+
+      // Debouncing check
+      const now = Date.now();
+      const lastPlayTime = this.lastAudioPlayTime.get(soundFile) || 0;
+      if (now - lastPlayTime < this.AUDIO_DEBOUNCE_MS) {
+        console.log(`⏸️ [${playId}] Debounced (${now - lastPlayTime}ms ago), skipping`);
+        return;
+      }
+      
+      // Update tracking
+      this.lastAudioPlayTime.set(soundFile, now);
+      const playCount = (this.audioPlayCount.get(soundFile) || 0) + 1;
+      this.audioPlayCount.set(soundFile, playCount);
+      
+      console.log(`🎯 [${playId}] Attempting play #${playCount} - Element state:`, {
+        readyState: audio.readyState,
+        paused: audio.paused,
+        ended: audio.ended,
+        currentTime: audio.currentTime,
+        duration: audio.duration,
+        networkState: audio.networkState
+      });
+      
+      // Check if audio is ready
+      if (audio.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA) {
+        console.log(`⏳ [${playId}] Audio not ready (readyState: ${audio.readyState}), waiting...`);
+        
+        // Wait for audio to be ready
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('Audio loading timeout'));
+          }, 3000);
+          
+          const onCanPlay = () => {
+            clearTimeout(timeout);
+            audio.removeEventListener('canplaythrough', onCanPlay);
+            audio.removeEventListener('error', onError);
+            resolve();
+          };
+          
+          const onError = (e: Event) => {
+            clearTimeout(timeout);
+            audio.removeEventListener('canplaythrough', onCanPlay);
+            audio.removeEventListener('error', onError);
+            reject(new Error(`Audio loading error: ${e}`));
+          };
+          
+          audio.addEventListener('canplaythrough', onCanPlay);
+          audio.addEventListener('error', onError);
+          
+          // Try loading if not already loaded
+          if (audio.readyState === HTMLMediaElement.HAVE_NOTHING) {
+            audio.load();
+          }
+        });
+      }
+      
+      // Stop any current playback and reset
+      if (!audio.paused) {
+        console.log(`🛑 [${playId}] Stopping current playback`);
+        audio.pause();
+      }
+      
+      audio.currentTime = 0;
+      console.log(`🔄 [${playId}] Reset audio, ready to play`);
+      
+      // Attempt to play with retry logic
+      let playSuccess = false;
+      let lastError: any = null;
+      
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          console.log(`▶️ [${playId}] Play attempt #${attempt}`);
+          
+          const playPromise = audio.play();
+          if (playPromise !== undefined) {
+            await playPromise;
+          }
+          
+          playSuccess = true;
+          const duration = performance.now() - startTime;
+          console.log(`✅ [${playId}] Audio played successfully in ${duration.toFixed(1)}ms`);
+          break;
+          
+        } catch (playError: any) {
+          lastError = playError;
+          console.warn(`⚠️ [${playId}] Play attempt #${attempt} failed:`, {
+            name: playError.name,
+            message: playError.message,
+            code: playError.code
+          });
+          
+          // Wait a bit before retry
+          if (attempt < 3) {
+            await new Promise(resolve => setTimeout(resolve, 50 * attempt));
+          }
+        }
+      }
+      
+      if (!playSuccess) {
+        const duration = performance.now() - startTime;
+        console.error(`❌ [${playId}] All play attempts failed after ${duration.toFixed(1)}ms:`, lastError);
+        
+        // Try one last desperate attempt with a fresh load
+        try {
+          console.log(`🆘 [${playId}] Attempting recovery with fresh load`);
+          audio.load();
+          await new Promise(resolve => setTimeout(resolve, 100));
+          await audio.play();
+          console.log(`🎉 [${playId}] Recovery successful!`);
+        } catch (recoveryError) {
+          console.error(`💀 [${playId}] Recovery also failed:`, recoveryError);
+        }
+      }
+      
+    } catch (error: any) {
+      const duration = performance.now() - startTime;
+      console.error(`💥 [${playId}] Critical audio feedback error after ${duration.toFixed(1)}ms:`, {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      });
     }
   }
 
@@ -410,7 +610,7 @@ class MuseVoiceApp {
   private async startRecording(): Promise<void> {
     try {
       this.setStatus('recording');
-      const result: string = await invoke('start_audio_stream');
+      const result: string = await invoke('start_audio_stream', { origin: 'click' });
       console.log('Recording started:', result);
     } catch (error) {
       console.error('Failed to start recording:', error);
@@ -422,7 +622,7 @@ class MuseVoiceApp {
   private async stopRecording(): Promise<void> {
     try {
       this.setStatus('processing');
-      const result: string = await invoke('stop_audio_stream');
+      const result: string = await invoke('stop_audio_stream', { origin: 'click' });
       console.log('Recording stopped:', result);
       // Status will be updated by polling to show transcribing -> ready
     } catch (error) {
@@ -434,7 +634,7 @@ class MuseVoiceApp {
 
   private async cancelTranscription(): Promise<void> {
     try {
-      const result: string = await invoke('cancel_transcription');
+      const result: string = await invoke('cancel_transcription', { origin: 'click' });
       console.log('Transcription cancelled:', result);
       this.setStatus('ready');
     } catch (error) {

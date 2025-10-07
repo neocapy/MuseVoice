@@ -29,6 +29,7 @@ pub enum FlowEvent {
     WavFileSaved(String), // Path to the saved WAV file
     WavDataReady(Vec<u8>), // WAV buffer ready for transcription (for retry functionality)
     WaveformChunk { bins: Vec<f32>, avg_rms: f32 },
+    AudioFeedback(String), // Sound file name to play for user feedback
     Error(String),
 }
 
@@ -90,15 +91,17 @@ pub struct Flow {
     callback: FlowCallback,
     cancellation_token: CancellationToken,
     model: String,
+    origin: String,
 }
 
 impl Flow {
-    pub fn new(callback: FlowCallback, model: String) -> Self {
+    pub fn new(callback: FlowCallback, model: String, origin: String) -> Self {
         Self {
             state: Arc::new(RwLock::new(FlowState::Idle)),
             callback,
             cancellation_token: CancellationToken::new(),
             model,
+            origin,
         }
     }
 
@@ -156,13 +159,15 @@ impl Flow {
 
     /// Main flow method: starts recording, waits for stop signal, then transcribes
     pub async fn run(&self, stop_signal: oneshot::Receiver<()>) -> Result<(), AudioError> {
-        // Set initial state
+        // Set initial state and emit audio feedback for starting recording
+        self.emit_audio_feedback_if_enabled("boowomp.mp3");
         self.set_state(FlowState::Recording).await;
 
         // Start audio recording
         let recording_data = match self.record_audio(stop_signal).await {
             Ok(data) => data,
             Err(e) => {
+                self.emit_audio_feedback_if_enabled("pipe.mp3");
                 self.set_state(FlowState::Error).await;
                 self.emit_event(FlowEvent::Error(e.message.clone()));
                 return Err(e);
@@ -171,11 +176,13 @@ impl Flow {
 
         // Check if cancelled during recording
         if self.cancellation_token.is_cancelled() {
+            self.emit_audio_feedback_if_enabled("pipe.mp3");
             self.set_state(FlowState::Cancelled).await;
             return Ok(());
         }
 
-        // Move to processing state
+        // Recording finished - emit bamboo hit sound and move to processing state
+        self.emit_audio_feedback_if_enabled("bamboo_hit.mp3");
         self.set_state(FlowState::Processing).await;
 
         // Encode audio (sync operation, but fast)
@@ -189,6 +196,7 @@ impl Flow {
                 let error = AudioError {
                     message: format!("Encoding error: {}", e),
                 };
+                self.emit_audio_feedback_if_enabled("pipe.mp3");
                 self.set_state(FlowState::Error).await;
                 self.emit_event(FlowEvent::Error(error.message.clone()));
                 return Err(error);
@@ -197,6 +205,7 @@ impl Flow {
                 let error = AudioError {
                     message: format!("Task join error: {}", e),
                 };
+                self.emit_audio_feedback_if_enabled("pipe.mp3");
                 self.set_state(FlowState::Error).await;
                 self.emit_event(FlowEvent::Error(error.message.clone()));
                 return Err(error);
@@ -205,6 +214,7 @@ impl Flow {
 
         // Check if cancelled during encoding
         if self.cancellation_token.is_cancelled() {
+            self.emit_audio_feedback_if_enabled("pipe.mp3");
             self.set_state(FlowState::Cancelled).await;
             return Ok(());
         }
@@ -225,6 +235,7 @@ impl Flow {
                 Ok(())
             }
             Err(e) => {
+                self.emit_audio_feedback_if_enabled("pipe.mp3");
                 self.set_state(FlowState::Error).await;
                 self.emit_event(FlowEvent::Error(e.message.clone()));
                 Err(e)
@@ -239,6 +250,7 @@ impl Flow {
 
         // Check if cancelled
         if self.cancellation_token.is_cancelled() {
+            self.emit_audio_feedback_if_enabled("pipe.mp3");
             self.set_state(FlowState::Cancelled).await;
             return Ok(());
         }
@@ -251,6 +263,7 @@ impl Flow {
                 Ok(())
             }
             Err(e) => {
+                self.emit_audio_feedback_if_enabled("pipe.mp3");
                 self.set_state(FlowState::Error).await;
                 self.emit_event(FlowEvent::Error(e.message.clone()));
                 Err(e)
@@ -601,6 +614,16 @@ impl Flow {
 
     fn emit_event(&self, event: FlowEvent) {
         (self.callback)(event);
+    }
+
+    fn should_emit_audio_feedback(&self) -> bool {
+        self.origin == "shortcut"
+    }
+
+    fn emit_audio_feedback_if_enabled(&self, sound_file: &str) {
+        if self.should_emit_audio_feedback() {
+            self.emit_event(FlowEvent::AudioFeedback(sound_file.to_string()));
+        }
     }
 
     fn find_input_device() -> Result<Device, AudioError> {

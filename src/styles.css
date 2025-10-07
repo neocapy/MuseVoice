@@ -93,8 +93,8 @@ html, body {
   align-items: center;
   justify-content: center;
   flex: 1;
-  gap: 8px;
-  padding: 8px 0;
+  gap: 2px;
+  padding: 2px 0;
 }
 
 #status-canvas {
@@ -124,8 +124,8 @@ html, body {
 .mode-toggle {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 4px 4px 0 4px;
+  gap: 0px;
+  padding: 0;
   flex-shrink: 0;
   border-top: 1px solid rgba(209, 213, 219, 0.3);
 }
@@ -134,16 +134,16 @@ html, body {
 .model-toggle {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 4px 4px 0 4px;
+  gap: 0px;
+  padding: 0;
   flex-shrink: 0;
 }
 
 .sidebar-controls {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 4px;
+  gap: 0px;
+  padding: 0px;
   flex-shrink: 0;
 }
 
@@ -151,14 +151,14 @@ html, body {
   background: none;
   border: none;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 14px;
   cursor: pointer;
-  padding: 4px;
+  padding: 0px;
   border-radius: 2px;
   transition: all 0.2s ease;
   font-family: 'Outfit', sans-serif;
   width: 100%;
-  height: 20px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -170,7 +170,7 @@ html, body {
 }
 
 .mode-btn {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 500;
   background-color: rgba(99, 102, 241, 0.05);
   border: 1px solid rgba(99, 102, 241, 0.2);
@@ -297,8 +297,8 @@ html, body {
   flex-direction: row;
   align-items: center;
   justify-content: flex-start;
-  gap: 8px;
-  padding: 0 8px;
+  gap: 2px;
+  padding: 0 2px;
 }
 
 .app-container.h-collapsed #status-canvas {
@@ -314,8 +314,8 @@ html, body {
   flex-direction: column; /* stack Repl / Clip */
   align-items: center;
   justify-content: center; /* vertically center within 48px bar */
-  gap: 2px;
-  padding: 0 6px;
+  gap: 0px;
+  padding: 0 0px;
   border-top: none;
 }
 
@@ -323,37 +323,46 @@ html, body {
   flex-direction: column;
   align-items: center;
   justify-content: center; /* vertically center */
-  gap: 2px;
-  padding: 0 6px;
+  gap: 0px;
+  padding: 0 0px;
 }
 
 .app-container.h-collapsed .sidebar-controls {
   flex-direction: column; /* stack Close over Minimize */
   align-items: center;
   justify-content: center; /* vertically center within 48px bar */
-  gap: 2px;
-  padding: 0 6px;
+  gap: 0px;
+  padding: 0 0px;
 }
+
+.app-container.h-collapsed .control-btn.mode-btn {
+  width: 40px;
+}
+
+.app-container.h-collapsed .control-btn {
+  width: 25px;
+}
+
 
 /* Ensure order: X on top, then -, retry last if visible */
 .app-container.h-collapsed #close-btn { order: 0; }
 .app-container.h-collapsed #minimize-btn { order: 1; }
-.app-container.h-collapsed #retry-btn { order: 2; }
 
 /* Keep items vertically centered across the bar */
 .app-container.h-collapsed .sidebar {
   align-items: center;
 }
 
+.app-container.h-collapsed .retry-btn {
+  height: 48px;
+  font-size: 20px;
+}
+
 /* Ensure minimum functionality on very small heights */
 @media (max-height: 199px) {
   .sidebar-content {
-    gap: 4px;
+    gap: 0px;
     padding: 4px 0;
-  }
-  
-  .status-label {
-    font-size: 10px;
   }
   
   .drag-handle {
@@ -361,8 +370,8 @@ html, body {
   }
   
   .control-btn {
-    height: 16px;
-    font-size: 10px;
+    height: 24px;
+    font-size: 12px;
   }
 }
 

@@ -24,9 +24,9 @@ impl FlowManager {
         }
     }
 
-    pub async fn start_flow(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState) -> Result<(), String> {
+    pub async fn start_flow(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState, origin: String) -> Result<(), String> {
         // Cancel any existing flow
-        self.cancel_flow().await;
+        self.cancel_flow(origin.clone()).await;
 
         // Create stop channel
         let (stop_sender, stop_receiver) = oneshot::channel();
@@ -72,6 +72,9 @@ impl FlowManager {
                     });
                 }
             }
+            FlowEvent::AudioFeedback(sound_file) => {
+                let _ = app_handle_clone.emit("audio-feedback", &sound_file);
+            }
             FlowEvent::Error(error) => {
                 // Emit retry availability when there's an error and we have WAV data
                 let app_handle_clone2 = app_handle_clone.clone();
@@ -89,7 +92,7 @@ impl FlowManager {
         });
 
         // Create and start flow
-        let flow = Arc::new(Flow::new(callback, self.model.clone()));
+        let flow = Arc::new(Flow::new(callback, self.model.clone(), origin.clone()));
         let flow_clone = Arc::clone(&flow);
 
         // Store references
@@ -106,7 +109,7 @@ impl FlowManager {
         Ok(())
     }
 
-    pub async fn stop_flow(&mut self) -> Result<(), String> {
+    pub async fn stop_flow(&mut self, _origin: String) -> Result<(), String> {
         println!("Flow manager: Stopping flow");
         if let Some(sender) = self.stop_sender.take() {
             println!("Flow manager: Sending stop signal");
@@ -122,7 +125,7 @@ impl FlowManager {
         }
     }
 
-    pub async fn cancel_flow(&mut self) {
+    pub async fn cancel_flow(&mut self, _origin: String) {
         if let Some(flow) = &self.current_flow {
             flow.cancel();
         }
@@ -150,14 +153,14 @@ impl FlowManager {
         self.retry_wav_data.is_some()
     }
 
-    pub async fn retry_transcription(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState) -> Result<(), String> {
+    pub async fn retry_transcription(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState, origin: String) -> Result<(), String> {
         // Get the stored WAV data
         let wav_data = self.retry_wav_data.clone().ok_or_else(|| {
             "No recorded audio available for retry".to_string()
         })?;
 
         // Cancel any existing flow
-        self.cancel_flow().await;
+        self.cancel_flow(origin.clone()).await;
 
         // Create callback for flow events
         let app_handle_clone = app_handle.clone();
@@ -179,6 +182,9 @@ impl FlowManager {
                 let _ = app_handle_clone.emit("transcription-result", &text);
                 let _ = app_handle_clone.emit("retry-available", false);
             }
+            FlowEvent::AudioFeedback(sound_file) => {
+                let _ = app_handle_clone.emit("audio-feedback", &sound_file);
+            }
             FlowEvent::Error(error) => {
                 // Emit retry availability when there's an error and we have WAV data
                 let app_handle_clone2 = app_handle_clone.clone();
@@ -197,7 +203,7 @@ impl FlowManager {
         });
 
         // Create flow and run transcription only
-        let flow = Arc::new(Flow::new(callback, self.model.clone()));
+        let flow = Arc::new(Flow::new(callback, self.model.clone(), origin.clone()));
         let flow_clone = Arc::clone(&flow);
 
         // Store reference

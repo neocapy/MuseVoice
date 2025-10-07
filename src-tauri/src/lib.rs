@@ -7,7 +7,7 @@ mod flow_manager;
 use flow_manager::{FlowManager, FlowManagerState, StatusResponse};
 use crate::flow::FlowState;
 use std::sync::Arc;
-use tauri::{AppHandle, State, Manager};
+use tauri::{AppHandle, State, Manager, Emitter};
 use tokio::sync::RwLock;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -38,6 +38,7 @@ async fn get_status(flow_manager: State<'_, FlowManagerState>) -> Result<StatusR
 async fn start_audio_stream(
     flow_manager: State<'_, FlowManagerState>,
     app_handle: AppHandle,
+    origin: String,
 ) -> Result<String, String> {
     let mut manager_guard = flow_manager.write().await;
 
@@ -47,7 +48,7 @@ async fn start_audio_stream(
         match current_state {
             FlowState::Idle | FlowState::Completed | FlowState::Error | FlowState::Cancelled => {
                 let flow_manager_clone = Arc::clone(&flow_manager.inner());
-                manager.start_flow(app_handle, flow_manager_clone).await?;
+                manager.start_flow(app_handle, flow_manager_clone, origin).await?;
                 Ok("Audio recording started successfully".to_string())
             }
             _ => Err("Cannot start recording: flow is not idle".to_string()),
@@ -58,7 +59,7 @@ async fn start_audio_stream(
 }
 
 #[tauri::command]
-async fn stop_audio_stream(flow_manager: State<'_, FlowManagerState>) -> Result<String, String> {
+async fn stop_audio_stream(flow_manager: State<'_, FlowManagerState>, origin: String) -> Result<String, String> {
     let mut manager_guard = flow_manager.write().await;
 
     if let Some(manager) = manager_guard.as_mut() {
@@ -66,7 +67,7 @@ async fn stop_audio_stream(flow_manager: State<'_, FlowManagerState>) -> Result<
 
         match current_state {
             FlowState::Recording => {
-                manager.stop_flow().await?;
+                manager.stop_flow(origin).await?;
                 Ok("Recording stopped, starting transcription...".to_string())
             }
             _ => Err("Cannot stop recording: not currently recording".to_string()),
@@ -77,11 +78,11 @@ async fn stop_audio_stream(flow_manager: State<'_, FlowManagerState>) -> Result<
 }
 
 #[tauri::command]
-async fn cancel_transcription(flow_manager: State<'_, FlowManagerState>) -> Result<String, String> {
+async fn cancel_transcription(flow_manager: State<'_, FlowManagerState>, origin: String) -> Result<String, String> {
     let mut manager_guard = flow_manager.write().await;
 
     if let Some(manager) = manager_guard.as_mut() {
-        manager.cancel_flow().await;
+        manager.cancel_flow(origin).await;
         Ok("Flow cancelled".to_string())
     } else {
         Err("Flow manager not initialized".to_string())
@@ -94,12 +95,13 @@ async fn cancel_transcription(flow_manager: State<'_, FlowManagerState>) -> Resu
 async fn retry_transcription(
     flow_manager: State<'_, FlowManagerState>,
     app_handle: AppHandle,
+    origin: String,
 ) -> Result<String, String> {
     let mut manager_guard = flow_manager.write().await;
 
     if let Some(manager) = manager_guard.as_mut() {
         let flow_manager_clone = Arc::clone(&flow_manager.inner());
-        manager.retry_transcription(app_handle, flow_manager_clone).await?;
+        manager.retry_transcription(app_handle, flow_manager_clone, origin).await?;
         Ok("Retrying transcription...".to_string())
     } else {
         Err("Flow manager not initialized".to_string())
@@ -144,10 +146,10 @@ async fn copy_to_clipboard(text: String, app_handle: AppHandle) -> Result<String
 #[cfg(desktop)]
 fn get_default_shortcut() -> &'static str {
     #[cfg(target_os = "macos")]
-    return "Cmd+Alt+Slash";
+    return "Alt+Slash";
     
     #[cfg(any(target_os = "windows", target_os = "linux"))]
-    return "Ctrl+Alt+Slash";
+    return "Alt+Slash";
 }
 
 #[cfg(desktop)]
@@ -230,14 +232,8 @@ fn parse_shortcut(shortcut_str: &str) -> Result<Shortcut, String> {
 }
 
 #[cfg(desktop)]
-async fn play_audio_feedback() {
-    // For now, we'll just print a message. In the future, this can be expanded
-    // to play the done.wav file using a cross-platform audio library
-    println!("🎵 Global shortcut triggered!");
-    
-    // Note: Playing audio files in Tauri requires additional setup with
-    // plugins like tauri-plugin-audio or custom implementation
-    // For now, we'll use the console as feedback
+fn emit_audio_feedback(app_handle: &AppHandle, sound_file: &str) {
+    let _ = app_handle.emit("audio-feedback", sound_file);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -279,9 +275,6 @@ pub fn run() {
                                         
                                         // Spawn async task to handle the shortcut
                                         tauri::async_runtime::spawn(async move {
-                                            // Play audio feedback
-                                            play_audio_feedback().await;
-                                            
                                             // Get current flow state and determine action
                                             let manager_guard = flow_manager_clone.read().await;
                                             
@@ -291,31 +284,40 @@ pub fn run() {
                                                 
                                                 match current_state {
                                                     FlowState::Idle | FlowState::Completed | FlowState::Error | FlowState::Cancelled => {
-                                                        // Start recording
+                                                        // Start recording - play boowomp.mp3
+                                                        emit_audio_feedback(&app_handle_clone, "boowomp.mp3");
                                                         let mut manager_guard = flow_manager_clone.write().await;
                                                         if let Some(manager) = manager_guard.as_mut() {
                                                             let flow_manager_clone_for_start = Arc::clone(&flow_manager_clone);
-                                                            match manager.start_flow(app_handle_clone.clone(), flow_manager_clone_for_start).await {
+                                                            match manager.start_flow(app_handle_clone.clone(), flow_manager_clone_for_start, "shortcut".to_string()).await {
                                                                 Ok(_) => println!("✅ Recording started via global shortcut"),
-                                                                Err(e) => eprintln!("❌ Failed to start recording: {}", e),
+                                                                Err(e) => {
+                                                                    eprintln!("❌ Failed to start recording: {}", e);
+                                                                    emit_audio_feedback(&app_handle_clone, "pipe.mp3");
+                                                                }
                                                             }
                                                         }
                                                     }
                                                     FlowState::Recording => {
-                                                        // Stop recording
+                                                        // Stop recording - play bamboo_hit.mp3
+                                                        emit_audio_feedback(&app_handle_clone, "bamboo_hit.mp3");
                                                         let mut manager_guard = flow_manager_clone.write().await;
                                                         if let Some(manager) = manager_guard.as_mut() {
-                                                            match manager.stop_flow().await {
+                                                            match manager.stop_flow("shortcut".to_string()).await {
                                                                 Ok(_) => println!("🛑 Recording stopped via global shortcut"),
-                                                                Err(e) => eprintln!("❌ Failed to stop recording: {}", e),
+                                                                Err(e) => {
+                                                                    eprintln!("❌ Failed to stop recording: {}", e);
+                                                                    emit_audio_feedback(&app_handle_clone, "pipe.mp3");
+                                                                }
                                                             }
                                                         }
                                                     }
                                                     FlowState::Processing => {
-                                                        // Cancel transcription
+                                                        // Cancel transcription - play pipe.mp3
+                                                        emit_audio_feedback(&app_handle_clone, "pipe.mp3");
                                                         let mut manager_guard = flow_manager_clone.write().await;
                                                         if let Some(manager) = manager_guard.as_mut() {
-                                                            manager.cancel_flow().await;
+                                                            manager.cancel_flow("shortcut".to_string()).await;
                                                             println!("❌ Flow cancelled via global shortcut");
                                                         }
                                                     }
@@ -342,25 +344,11 @@ pub fn run() {
                 }
             }
             
-            // Set platform-specific default window size at startup
             if let Some(window) = app.get_webview_window("main") {
-                #[cfg(target_os = "windows")]
-                {
-                    // Horizontal collapse condition (min height) with width = 200 px
-                    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
-                        width: 250.0,
-                        height: 48.0,
-                    }));
-                }
-
-                #[cfg(not(target_os = "windows"))]
-                {
-                    // Vertical collapse condition (min width) with height = 200 px
-                    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
-                        width: 48.0,
-                        height: 300.0,
-                    }));
-                }
+                let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                    width: 270.0,
+                    height: 48.0,
+                }));
             }
 
             // Initialize the flow manager in an async context
