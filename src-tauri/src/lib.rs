@@ -3,6 +3,7 @@
 mod encode;
 mod flow;
 mod flow_manager;
+mod stream_processor;
 pub mod ebml;
 pub mod opus;
 pub mod webm;

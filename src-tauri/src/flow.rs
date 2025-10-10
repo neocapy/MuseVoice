@@ -1,14 +1,16 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, SampleRate, StreamConfig};
+use crossbeam_channel::RecvTimeoutError;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::{mpsc, oneshot, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::{oneshot, RwLock};
 use tokio_util::sync::CancellationToken;
+use crate::stream_processor::AudioStreamProcessor;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -95,12 +97,6 @@ impl From<cpal::SupportedStreamConfigsError> for AudioError {
     }
 }
 
-#[derive(Debug)]
-pub struct RecordingData {
-    pub samples: Vec<f32>,
-    pub sample_rate: u32,
-}
-
 pub struct Flow {
     state: Arc<RwLock<FlowState>>,
     callback: FlowCallback,
@@ -182,8 +178,8 @@ impl Flow {
                 self.emit_audio_feedback_if_enabled("boowomp.mp3");
                 self.set_state(FlowState::Recording).await;
 
-                // Start audio recording
-                let recording_data = match self.record_audio(stop_signal).await {
+                // Start streaming audio recording (now includes encoding)
+                let audio_data = match self.record_audio(stop_signal).await {
                     Ok(data) => data,
                     Err(e) => {
                         self.emit_audio_feedback_if_enabled("pipe.mp3");
@@ -193,50 +189,16 @@ impl Flow {
                     }
                 };
 
-                // Check if cancelled during recording
+                // Check if cancelled
                 if self.cancellation_token.is_cancelled() {
                     self.emit_audio_feedback_if_enabled("pipe.mp3");
                     self.set_state(FlowState::Cancelled).await;
                     return Ok(());
                 }
 
-                // Recording finished - emit bamboo hit sound and move to processing state
+                // Recording and encoding complete - emit bamboo hit sound
                 self.emit_audio_feedback_if_enabled("bamboo_hit.mp3");
                 self.set_state(FlowState::Processing).await;
-
-                // Encode audio as WebM Opus (sync operation, but fast)
-                let audio_data = match tokio::task::spawn_blocking(move || {
-                    crate::encode::resample_and_encode_webm(recording_data, 24000u32, 64000).map_err(|e| e.to_string())
-                })
-                .await
-                {
-                    Ok(Ok(data)) => data,
-                    Ok(Err(e)) => {
-                        let error = AudioError {
-                            message: format!("Encoding error: {}", e),
-                        };
-                        self.emit_audio_feedback_if_enabled("pipe.mp3");
-                        self.set_state(FlowState::Error).await;
-                        self.emit_event(FlowEvent::Error(error.message.clone()));
-                        return Err(error);
-                    }
-                    Err(e) => {
-                        let error = AudioError {
-                            message: format!("Task join error: {}", e),
-                        };
-                        self.emit_audio_feedback_if_enabled("pipe.mp3");
-                        self.set_state(FlowState::Error).await;
-                        self.emit_event(FlowEvent::Error(error.message.clone()));
-                        return Err(error);
-                    }
-                };
-
-                // Check if cancelled during encoding
-                if self.cancellation_token.is_cancelled() {
-                    self.emit_audio_feedback_if_enabled("pipe.mp3");
-                    self.set_state(FlowState::Cancelled).await;
-                    return Ok(());
-                }
 
                 // Emit audio data for potential retry functionality
                 self.emit_event(FlowEvent::AudioDataReady(audio_data.clone()));
@@ -300,79 +262,54 @@ impl Flow {
     async fn record_audio(
         &self,
         stop_signal: oneshot::Receiver<()>,
-    ) -> Result<RecordingData, AudioError> {
+    ) -> Result<Vec<u8>, AudioError> {
         let device = Self::find_input_device()?;
-        let config = Self::get_best_config(&device)?;
+        let (config, sample_format) = Self::get_best_config(&device)?;
         let sample_rate = config.sample_rate.0;
 
         println!(
-            "Starting recording: {} channels, {} Hz",
+            "Starting streaming recording: {} channels, {} Hz",
             config.channels, sample_rate
         );
 
-        // Create channels for communication with the blocking audio thread
-        let (sample_sender, mut sample_receiver) = mpsc::unbounded_channel::<Vec<f32>>();
+        // Create channels for communication between threads
+        let (sample_sender, sample_receiver) = crossbeam_channel::unbounded::<Vec<f32>>();
         let (stop_sender, stop_receiver) = oneshot::channel();
-        let (result_sender, result_receiver) = oneshot::channel();
+        let (audio_result_sender, audio_result_receiver) = oneshot::channel();
 
         let callback = Arc::clone(&self.callback);
         let cancellation_token = self.cancellation_token.clone();
 
-        // Spawn the audio recording in a blocking task
-        let _handle = tokio::task::spawn_blocking(move || {
+        // Spawn the audio recording thread
+        let _audio_handle = tokio::task::spawn_blocking(move || {
             Self::run_audio_recording_thread(
                 device,
                 config,
+                sample_format,
                 sample_sender,
                 stop_receiver,
-                result_sender,
+                audio_result_sender,
             )
         });
 
-        // Accumulate samples from the audio thread
-        let mut all_samples = Vec::new();
-        let mut sample_count = 0;
-        let mut stop_signal = Some(stop_signal);
-        let mut result_receiver = Some(result_receiver);
+        // Spawn the processing thread
+        let sample_receiver_clone = sample_receiver.clone();
+        let processing_handle = tokio::task::spawn_blocking(move || {
+            Self::run_processing_thread(
+                sample_rate,
+                sample_receiver_clone,
+            )
+        });
 
-        // Buffer for emitting periodic waveform chunks (2048 samples -> 128 RMS bins)
-        let mut waveform_buffer: Vec<f32> = Vec::new();
+        // Main event loop - just wait for stop signal or completion
+        let mut stop_signal = Some(stop_signal);
+        let mut audio_result_receiver = Some(audio_result_receiver);
 
         loop {
             tokio::select! {
-                // Receive samples from audio thread
-                Some(samples) = sample_receiver.recv() => {
-                    all_samples.extend_from_slice(&samples);
-                    sample_count += samples.len();
-                    callback(FlowEvent::SampleCount(sample_count));
-
-                    // Accumulate into waveform buffer and emit chunks of 2048 samples
-                    waveform_buffer.extend_from_slice(&samples);
-                    while waveform_buffer.len() >= 2048 {
-                        // Compute 128 RMS bins (groups of 16 samples)
-                        let mut bins: Vec<f32> = Vec::with_capacity(128);
-                        let mut sum_rms: f32 = 0.0;
-                        for i in 0..128 {
-                            let start = i * 16;
-                            let mut sumsq: f32 = 0.0;
-                            for j in 0..16 {
-                                let v = waveform_buffer[start + j];
-                                sumsq += v * v;
-                            }
-                            let rms = (sumsq / 16.0).sqrt();
-                            bins.push(rms);
-                            sum_rms += rms;
-                        }
-                        let avg_rms = sum_rms / 128.0;
-                        callback(FlowEvent::WaveformChunk { bins, avg_rms });
-                        // Drain the processed 2048 samples
-                        waveform_buffer.drain(0..2048);
-                    }
-                }
-
                 // Stop signal received
                 _ = stop_signal.as_mut().unwrap() => {
-                    println!("Stop signal received");
+                    println!("Stop signal received, stopping audio recording...");
                     let _ = stop_sender.send(());
                     break;
                 }
@@ -384,7 +321,7 @@ impl Flow {
                 }
 
                 // Audio thread finished
-                result = result_receiver.as_mut().unwrap() => {
+                result = audio_result_receiver.as_mut().unwrap() => {
                     match result {
                         Ok(Ok(())) => {
                             println!("Audio thread finished successfully");
@@ -401,139 +338,206 @@ impl Flow {
             }
         }
 
-        println!(
-            "Recording stopped. Captured {} samples at {} Hz",
-            all_samples.len(),
-            sample_rate
-        );
+        // Drop sample_receiver to signal processing thread to finalize
+        drop(sample_receiver);
 
-        Ok(RecordingData {
-            samples: all_samples,
-            sample_rate,
-        })
+        // Wait for processing thread to complete and return WebM data
+        match processing_handle.await {
+            Ok(Ok(webm_data)) => {
+                println!("[Main Thread] Processing complete, WebM data ready: {} bytes", webm_data.len());
+Ok(webm_data)
+            }
+            Ok(Err(e)) => {
+                Err(AudioError { message: format!("Processing thread error: {}", e) })
+            }
+            Err(e) => {
+                Err(AudioError { message: format!("Processing thread join error: {}", e) })
+            }
+        }
+    }
+
+    /// Processing thread that resamples and encodes audio in real-time
+    fn run_processing_thread(
+        input_sample_rate: u32,
+        sample_receiver: crossbeam_channel::Receiver<Vec<f32>>,
+    ) -> Result<Vec<u8>, String> {
+        (|| -> Result<Vec<u8>, String> {
+            // Calculate chunk size: 100ms of audio at input sample rate
+            let chunk_size = ((input_sample_rate as f32 * 0.1) as usize).max(960);
+
+            println!("[Processing Thread] Started with chunk size: {}", chunk_size);
+
+            // Create streaming processor
+            let mut processor = AudioStreamProcessor::new(
+                input_sample_rate,
+                48000, // target sample rate for WebM (Opus native rate)
+                64000, // 64 kbps bitrate
+                chunk_size,
+            ).map_err(|e| format!("Failed to create processor: {}", e))?;
+
+            let mut last_stats_print = Instant::now();
+            let stats_interval = Duration::from_secs(1);
+            let mut total_received = 0usize;
+            let mut total_sample_count = 0usize;
+
+            // Process samples as they arrive
+            loop {
+                match sample_receiver.recv_timeout(Duration::from_millis(100)) {
+                    Ok(samples) => {
+                        let sample_count = samples.len();
+                        total_received += sample_count;
+                        total_sample_count += sample_count;
+                        
+                        processor.push_samples(&samples)
+                            .map_err(|e| format!("Failed to process samples: {}", e))?;
+
+                        // Print stats periodically
+                        if last_stats_print.elapsed() >= stats_interval {
+                            let stats = processor.stats();
+                            println!(
+                                "[Processing Thread] Channel received: {} samples | \
+                                 Processor received: {} samples | Resampled: {} samples | \
+                                 Chunks: {} | Buffer: {}/{} ({:.1}%) | WebM: {} bytes",
+                                total_received,
+                                stats.samples_received,
+                                stats.samples_resampled,
+                                stats.chunks_processed,
+                                stats.buffer_fill,
+                                stats.buffer_capacity,
+                                stats.buffer_fill_pct(),
+                                stats.webm_buffer_size,
+                            );
+                            last_stats_print = Instant::now();
+                        }
+                    }
+                    Err(RecvTimeoutError::Timeout) => {
+                        // No samples available, continue waiting
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => {
+                        // Channel closed, audio recording finished
+                        println!("[Processing Thread] Channel closed. Total received: {} samples", total_received);
+                        println!("[Processing Thread] Finalizing processor...");
+                        break;
+                    }
+                }
+            }
+
+            // Finalize and return WebM data
+            let webm_data = processor.finalize()
+                .map_err(|e| format!("Failed to finalize processor: {}", e))?;
+            
+            println!("[Processing Thread] Total samples processed: {}", total_sample_count);
+            println!("[Processing Thread] Expected duration: {:.2}s at {}Hz", 
+                total_sample_count as f64 / input_sample_rate as f64, input_sample_rate);
+            
+            Ok(webm_data)
+        })()
     }
 
     fn run_audio_recording_thread(
         device: Device,
         config: StreamConfig,
-        sample_sender: mpsc::UnboundedSender<Vec<f32>>,
+        sample_format: SampleFormat,
+        sample_sender: crossbeam_channel::Sender<Vec<f32>>,
         stop_receiver: oneshot::Receiver<()>,
         result_sender: oneshot::Sender<Result<(), String>>,
     ) {
         let result = (|| -> Result<(), String> {
             let channels = config.channels;
 
+            // Track total samples captured
+            let total_captured = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let total_captured_clone = total_captured.clone();
+
             // Find the best supported config according to our preference order:
-            // 1. 24000 Hz f32
-            // 2. 24000 Hz i16
-            // 3. 24000 Hz i32
-            // 4. >24000 Hz f32, i16, i32 (lowest above 24000 preferred)
+            // 1. 48000 Hz f32
+            // 2. 48000 Hz i16
+            // 3. 48000 Hz i32
+            // 4. >48000 Hz f32, i16, i32 (lowest above 48000 preferred)
             // 5. Any f32, i16, i32 (lowest sample rate preferred)
             // Otherwise, bail.
 
-            let supported_configs: Vec<_> = device
-                .supported_input_configs()
-                .map_err(|e| format!("Failed to get supported configs: {}", e))?
-                .collect();
-
-            // Assign a score to each config: lower is better
-            // (score, sample_rate, format, config)
-            let mut scored_configs: Vec<(u32, u32, SampleFormat, cpal::SupportedStreamConfigRange)> = vec![];
-
-            for config in supported_configs.into_iter() {
-                let fmt = config.sample_format();
-                let min_rate = config.min_sample_rate().0;
-                let max_rate = config.max_sample_rate().0;
-                // We'll just use min_rate for scoring, but could be more sophisticated
-                let mut best_rate = min_rate;
-                // If the config supports a range, prefer 24000 if in range, else min above 24000, else min
-                if min_rate <= 24000 && max_rate >= 24000 {
-                    best_rate = 24000;
-                } else if min_rate > 24000 {
-                    best_rate = min_rate;
-                }
-                let score = if best_rate == 24000 && fmt == SampleFormat::F32 {
-                    0
-                } else if best_rate == 24000 && fmt == SampleFormat::I16 {
-                    1
-                } else if best_rate == 24000 && fmt == SampleFormat::I32 {
-                    2
-                } else if best_rate > 24000 && fmt == SampleFormat::F32 {
-                    3
-                } else if best_rate > 24000 && fmt == SampleFormat::I16 {
-                    4
-                } else if best_rate > 24000 && fmt == SampleFormat::I32 {
-                    5
-                } else if fmt == SampleFormat::F32 {
-                    6
-                } else if fmt == SampleFormat::I16 {
-                    7
-                } else if fmt == SampleFormat::I32 {
-                    8
-                } else {
-                    100
-                };
-                scored_configs.push((score, best_rate, fmt, config));
-            }
-
-            // Sort by score, then by sample rate (prefer lower sample rate for resampling quality)
-            scored_configs.sort_by(|a, b| {
-                a.0.cmp(&b.0)
-                    .then_with(|| a.1.cmp(&b.1))
-            });
-
-            let (_, selected_rate, selected_format, _) = match scored_configs.first() {
-                Some((score, rate, fmt, config)) if *score < 100 => (*score, *rate, *fmt, config.clone()),
-                _ => return Err("No supported sample format (f32, i16, i32) found".to_string()),
-            };
-
-            // Build the actual config to use
+            // Use the provided config and sample format; only set buffer size here
             let mut config = config.clone();
-            config.sample_rate = cpal::SampleRate(selected_rate);
+            config.buffer_size = cpal::BufferSize::Fixed(2048);
 
-            let sample_format = selected_format;
+            let sample_format = sample_format;
 
             let recording_active = Arc::new(AtomicBool::new(true));
             let recording_active_clone = Arc::clone(&recording_active);
 
+            let total_cap_f32 = total_captured_clone.clone();
             let stream = match sample_format {
-                SampleFormat::F32 => device.build_input_stream(
-                    &config,
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        if recording_active_clone.load(Ordering::Relaxed) {
-                            let mono_data = Self::mix_to_mono(data, channels);
-                            let _ = sample_sender.send(mono_data);
-                        }
-                    },
-                    |err| eprintln!("Audio stream error: {}", err),
-                    None,
-                ),
-                SampleFormat::I16 => device.build_input_stream(
-                    &config,
-                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        if recording_active_clone.load(Ordering::Relaxed) {
-                            let float_data: Vec<f32> =
-                                data.iter().map(|&s| s.to_sample::<f32>()).collect();
-                            let mono_data = Self::mix_to_mono(&float_data, channels);
-                            let _ = sample_sender.send(mono_data);
-                        }
-                    },
-                    |err| eprintln!("Audio stream error: {}", err),
-                    None,
-                ),
-                SampleFormat::I32 => device.build_input_stream(
-                    &config,
-                    move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                        if recording_active_clone.load(Ordering::Relaxed) {
-                            let float_data: Vec<f32> =
-                                data.iter().map(|&s| s.to_sample::<f32>()).collect();
-                            let mono_data = Self::mix_to_mono(&float_data, channels);
-                            let _ = sample_sender.send(mono_data);
-                        }
-                    },
-                    |err| eprintln!("Audio stream error: {}", err),
-                    None,
-                ),
+                SampleFormat::F32 => {
+                    let first_callback = Arc::new(AtomicBool::new(true));
+                    let first_callback_clone = first_callback.clone();
+                    device.build_input_stream(
+                        &config,
+                        move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                            if recording_active_clone.load(Ordering::Relaxed) {
+                                if first_callback_clone.load(Ordering::Relaxed) {
+                                    println!("[Audio Callback] First callback - data.len()={}, channels={}, samples_per_callback={}",
+                                        data.len(), channels, data.len() / channels as usize);
+                                    first_callback_clone.store(false, Ordering::Relaxed);
+                                }
+                                total_cap_f32.fetch_add(data.len(), Ordering::Relaxed);
+                                let mono_data = Self::mix_to_mono(data, channels);
+                                let _ = sample_sender.send(mono_data);
+                            }
+                        },
+                        |err| eprintln!("Audio stream error: {}", err),
+                        None,
+                    )
+                }
+                SampleFormat::I16 => {
+                    let total_cap_i16 = total_captured_clone.clone();
+                    let first_callback = Arc::new(AtomicBool::new(true));
+                    let first_callback_clone = first_callback.clone();
+                    device.build_input_stream(
+                        &config,
+                        move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                            if recording_active_clone.load(Ordering::Relaxed) {
+                                if first_callback_clone.load(Ordering::Relaxed) {
+                                    println!("[Audio Callback] First callback - data.len()={}, channels={}, samples_per_callback={}",
+                                        data.len(), channels, data.len() / channels as usize);
+                                    first_callback_clone.store(false, Ordering::Relaxed);
+                                }
+                                total_cap_i16.fetch_add(data.len(), Ordering::Relaxed);
+                                let float_data: Vec<f32> =
+                                    data.iter().map(|&s| s.to_sample::<f32>()).collect();
+                                let mono_data = Self::mix_to_mono(&float_data, channels);
+                                let _ = sample_sender.send(mono_data);
+                            }
+                        },
+                        |err| eprintln!("Audio stream error: {}", err),
+                        None,
+                    )
+                }
+                SampleFormat::I32 => {
+                    let total_cap_i32 = total_captured_clone.clone();
+                    let first_callback = Arc::new(AtomicBool::new(true));
+                    let first_callback_clone = first_callback.clone();
+                    device.build_input_stream(
+                        &config,
+                        move |data: &[i32], _: &cpal::InputCallbackInfo| {
+                            if recording_active_clone.load(Ordering::Relaxed) {
+                                if first_callback_clone.load(Ordering::Relaxed) {
+                                    println!("[Audio Callback] First callback - data.len()={}, channels={}, samples_per_callback={}",
+                                        data.len(), channels, data.len() / channels as usize);
+                                    first_callback_clone.store(false, Ordering::Relaxed);
+                                }
+                                total_cap_i32.fetch_add(data.len(), Ordering::Relaxed);
+                                let float_data: Vec<f32> =
+                                    data.iter().map(|&s| s.to_sample::<f32>()).collect();
+                                let mono_data = Self::mix_to_mono(&float_data, channels);
+                                let _ = sample_sender.send(mono_data);
+                            }
+                        },
+                        |err| eprintln!("Audio stream error: {}", err),
+                        None,
+                    )
+                }
                 _ => {
                     return Err("Unsupported sample format".to_string());
                 }
@@ -552,6 +556,9 @@ impl Flow {
             // Stop recording
             recording_active.store(false, Ordering::Relaxed);
             drop(stream);
+
+            let final_count = total_captured.load(Ordering::Relaxed);
+            println!("[Audio Thread] Total samples captured: {}", final_count);
 
             Ok(())
         })();
@@ -812,43 +819,62 @@ impl Flow {
         Ok(device)
     }
 
-    fn get_best_config(device: &Device) -> Result<StreamConfig, AudioError> {
+    fn get_best_config(device: &Device) -> Result<(StreamConfig, SampleFormat), AudioError> {
         let supported_configs = device.supported_input_configs().map_err(|_| AudioError {
             message: "Unsupported format".to_string(),
         })?;
 
-        // Try to find a configuration that supports 16kHz mono
-        let mut best_config = None;
-        let mut fallback_config = None;
+        // Prefer 48000 Hz, mono if possible. Prefer F32, then I16, then I32.
+        let mut best: Option<(u32, bool, SampleFormat, cpal::SupportedStreamConfigRange)> = None;
 
-        for config in supported_configs {
-            // Check if 16kHz is supported
-            if config.min_sample_rate() <= SampleRate(16000)
-                && config.max_sample_rate() >= SampleRate(16000)
-            {
-                // Prefer mono, but accept any channel count
-                if config.channels() == 1 {
-                    best_config = Some(config.with_sample_rate(SampleRate(16000)));
-                    break;
-                } else if best_config.is_none() {
-                    best_config = Some(config.with_sample_rate(SampleRate(16000)));
+        for range in supported_configs {
+            let supports_48k = range.min_sample_rate() <= SampleRate(48000)
+                && range.max_sample_rate() >= SampleRate(48000);
+            let fmt = range.sample_format();
+            let channels = range.channels();
+            let is_mono = channels == 1;
+
+            // Score: lower is better
+            let rate_score = if supports_48k { 0 } else { 1 };
+            let fmt_score = match fmt {
+                SampleFormat::F32 => 0,
+                SampleFormat::I16 => 1,
+                SampleFormat::I32 => 2,
+                _ => 3,
+            };
+            let mono_score = if is_mono { 0 } else { 1 };
+
+            let score_tuple = (rate_score, mono_score, fmt_score);
+
+            match &best {
+                None => best = Some((score_tuple.0 * 100 + score_tuple.1 * 10 + score_tuple.2, is_mono, fmt, range)),
+                Some((best_score, _, _, _)) => {
+                    let score = score_tuple.0 * 100 + score_tuple.1 * 10 + score_tuple.2;
+                    if score < *best_score {
+                        best = Some((score, is_mono, fmt, range));
+                    }
                 }
-            }
-
-            // Keep a fallback config
-            if fallback_config.is_none() {
-                fallback_config = Some(config.with_max_sample_rate());
             }
         }
 
-        let config = best_config
-            .or(fallback_config)
-            .ok_or_else(|| AudioError {
-                message: "Unsupported format".to_string(),
-            })?
-            .into();
+        let (_score, _mono, fmt, range) = best.ok_or_else(|| AudioError {
+            message: "Unsupported format".to_string(),
+        })?;
 
-        Ok(config)
+        // Choose 48000 if supported, otherwise use min sample rate in range.
+        let picked_rate = if range.min_sample_rate() <= SampleRate(48000)
+            && range.max_sample_rate() >= SampleRate(48000)
+        {
+            SampleRate(48000)
+        } else {
+            range.min_sample_rate()
+        };
+
+        // Build concrete config and convert to StreamConfig
+        let cfg = range.with_sample_rate(picked_rate);
+        let stream_config: StreamConfig = cfg.clone().into();
+
+        Ok((stream_config, fmt))
     }
 
     fn mix_to_mono(data: &[f32], channels: u16) -> Vec<f32> {

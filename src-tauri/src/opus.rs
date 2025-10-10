@@ -56,12 +56,11 @@
 // Include the generated bindings
 include!(concat!(env!("OUT_DIR"), "/opus_bindings.rs"));
 
-/// Sample rate for opus encoding (48kHz is the native rate for opus,
-/// but we record at 24kHz)
-const SAMPLE_RATE: i32 = 24000;
+/// Sample rate for opus encoding (48kHz is the native rate for opus)
+const SAMPLE_RATE: i32 = 48000;
 
-/// Frame size for 20ms at 24kHz
-const FRAME_SIZE: usize = 480;
+/// Frame size for 20ms at 48kHz
+const FRAME_SIZE: usize = 960;
 
 /// Maximum packet size for opus (as recommended in the docs)
 const MAX_PACKET_SIZE: usize = 4000;
@@ -194,7 +193,7 @@ impl BufferedOpusEncoder {
     /// Add audio samples to the encoder (i16 format)
     ///
     /// This method accepts any number of samples. They will be buffered
-    /// internally until we have enough for a complete 20ms frame (480 samples at 24kHz),
+    /// internally until we have enough for a complete 20ms frame (960 samples at 48kHz),
     /// at which point they will be encoded automatically.
     ///
     /// # Arguments
@@ -451,7 +450,7 @@ mod tests {
     fn test_get_preskip() {
         let encoder = BufferedOpusEncoder::new(64000).unwrap();
         let preskip = encoder.get_preskip().unwrap();
-        // Preskip should be positive and reasonable (typically 312 for 24kHz)
+        // Preskip should be positive and reasonable (typically 312 for 48kHz)
         assert!(preskip > 0);
         assert!(preskip < 1000);
     }

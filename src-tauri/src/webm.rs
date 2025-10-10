@@ -46,8 +46,8 @@
 use crate::ebml::EbmlBuilder;
 use crate::opus::{BufferedOpusEncoder, OpusError};
 
-/// Sample rate for audio (24kHz)
-const SAMPLE_RATE: u32 = 24000;
+/// Sample rate for audio (48kHz - Opus native rate)
+const SAMPLE_RATE: u32 = 48000;
 
 /// Frame duration in milliseconds (20ms)
 const FRAME_DURATION_MS: u32 = 20;
@@ -204,10 +204,14 @@ impl WebmWriter {
     fn process_encoded_frames(&mut self) -> Result<(), OpusError> {
         let frames = self.encoder.take_frames();
         
+        if !frames.is_empty() {
+            println!("[WebmWriter] Processing {} Opus frame(s)", frames.len());
+        }
+
         for frame in frames {
             self.write_opus_frame(&frame)?;
         }
-        
+
         Ok(())
     }
     
@@ -232,7 +236,7 @@ impl WebmWriter {
         
         // Update timestamp for next frame
         self.current_timestamp_ms += FRAME_DURATION_MS;
-        self.total_samples_encoded += 480; // 480 samples per frame at 24kHz
+        self.total_samples_encoded += 960; // 960 samples per frame at 48kHz
         
         // Check if we should start a new cluster
         if self.current_timestamp_ms >= self.cluster_start_timestamp_ms + CLUSTER_DURATION_MS {
@@ -388,8 +392,8 @@ impl WebmWriter {
         
         track_entry.u1(ids::CODEC_ID).size(6).bytes(b"A_OPUS");
         
-        // Codec delay (6500000 ns = 6.5ms)
-        track_entry.u2(ids::CODEC_DELAY).size(3).bytes(&[0x63, 0x2E, 0xA0]);
+        // Codec delay derived from preskip (in nanoseconds)
+        track_entry.u2(ids::CODEC_DELAY).size(8).u8(((preskip as u64) * 1_000_000_000u64 / SAMPLE_RATE as u64));
         
         // Seek pre-roll (80000000 ns = 80ms)
         track_entry.u2(ids::SEEK_PRE_ROLL).size(4).u4(80000000);
@@ -428,7 +432,7 @@ impl WebmWriter {
         head.push((preskip & 0xFF) as u8);
         head.push(((preskip >> 8) & 0xFF) as u8);
         
-        // Input sample rate (little-endian u32) - use 24000
+        // Input sample rate (little-endian u32) - use 48000
         head.push((SAMPLE_RATE & 0xFF) as u8);
         head.push(((SAMPLE_RATE >> 8) & 0xFF) as u8);
         head.push(((SAMPLE_RATE >> 16) & 0xFF) as u8);
@@ -476,7 +480,7 @@ mod tests {
     #[test]
     fn test_add_samples_i16() {
         let mut writer = WebmWriter::new(64000).unwrap();
-        let samples = vec![0i16; 480];
+        let samples = vec![0i16; 960];
         
         let result = writer.add_samples(&samples);
         assert!(result.is_ok());
@@ -486,7 +490,7 @@ mod tests {
     #[test]
     fn test_add_samples_f32() {
         let mut writer = WebmWriter::new(64000).unwrap();
-        let samples = vec![0.0f32; 480];
+        let samples = vec![0.0f32; 960];
         
         let result = writer.add_samples_f32(&samples);
         assert!(result.is_ok());
@@ -499,7 +503,7 @@ mod tests {
         
         // Add ~2 seconds of audio (should create 2 clusters)
         for _ in 0..100 {
-            writer.add_samples(&vec![0i16; 480]).unwrap();
+            writer.add_samples(&vec![0i16; 960]).unwrap();
         }
         
         // Should have at least 1 completed cluster
@@ -509,7 +513,7 @@ mod tests {
     #[test]
     fn test_finalize() {
         let mut writer = WebmWriter::new(64000).unwrap();
-        writer.add_samples(&vec![0i16; 480]).unwrap();
+        writer.add_samples(&vec![0i16; 960]).unwrap();
         
         let webm_data = writer.finalize();
         assert!(webm_data.is_ok());
@@ -522,7 +526,7 @@ mod tests {
     #[test]
     fn test_double_finalize_error() {
         let mut writer = WebmWriter::new(64000).unwrap();
-        writer.add_samples(&vec![0i16; 480]).unwrap();
+        writer.add_samples(&vec![0i16; 960]).unwrap();
         
         let _ = writer.finalize().unwrap();
         // Can't test second finalize because it consumes self
