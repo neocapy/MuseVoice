@@ -3,6 +3,9 @@
 mod encode;
 mod flow;
 mod flow_manager;
+pub mod ebml;
+pub mod opus;
+pub mod webm;
 
 use flow_manager::{FlowManager, FlowManagerState, StatusResponse};
 use crate::flow::FlowState;

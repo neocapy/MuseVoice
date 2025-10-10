@@ -1,9 +1,9 @@
 [package]
 name = "muse"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
-edition = "2021"
+description = "Muse"
+authors = ["neocapy"]
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -16,6 +16,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+cmake = "0.1"
+bindgen = "0.72"
+
 
 [dependencies]
 tauri = { version = "2", features = ["devtools"] }
@@ -43,4 +46,3 @@ panic = "abort"
 lto = true
 opt-level = 2
 strip = true
-

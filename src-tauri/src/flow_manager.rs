@@ -15,7 +15,7 @@ enum CallbackMode {
 pub struct FlowManager {
     current_flow: Option<Arc<Flow>>,
     stop_sender: Option<oneshot::Sender<()>>,
-    retry_wav_data: Option<Vec<u8>>, // Store WAV data for retry functionality
+    retry_audio_data: Option<Vec<u8>>, // Store audio data (WebM format) for retry functionality
     model: String,
     rewrite_enabled: bool,
 }
@@ -25,7 +25,7 @@ impl FlowManager {
         Self {
             current_flow: None,
             stop_sender: None,
-            retry_wav_data: None,
+            retry_audio_data: None,
             model: "whisper-1".to_string(),
             rewrite_enabled: false,
         }
@@ -46,7 +46,7 @@ impl FlowManager {
                         tokio::spawn(async move {
                             let mut manager_guard = manager_arc.write().await;
                             if let Some(manager) = manager_guard.as_mut() {
-                                manager.clear_wav_data();
+                                manager.clear_audio_data();
                             }
                         });
                     }
@@ -57,7 +57,7 @@ impl FlowManager {
                     let _ = app_handle_clone.emit("audio-feedback", &sound_file);
                 }
                 (_, FlowEvent::Error(error)) => {
-                    // Emit retry availability when there's an error and we have WAV data
+                    // Emit retry availability when there's an error and we have audio data
                     let app_handle_clone2 = app_handle_clone.clone();
                     if let Some(manager_arc) = flow_manager_weak.upgrade() {
                         tokio::spawn(async move {
@@ -79,16 +79,16 @@ impl FlowManager {
                     let payload = WaveformChunkPayload { bins, avg_rms };
                     let _ = app_handle_clone.emit("waveform-chunk", payload);
                 }
-                (CallbackMode::Full, FlowEvent::WavFileSaved(path)) => {
-                    let _ = app_handle_clone.emit("wav-file-saved", &path);
+                (CallbackMode::Full, FlowEvent::AudioFileSaved(path)) => {
+                    let _ = app_handle_clone.emit("audio-file-saved", &path);
                 }
-                (CallbackMode::Full, FlowEvent::WavDataReady(wav_data)) => {
-                    // Store WAV data directly in FlowManager
+                (CallbackMode::Full, FlowEvent::AudioDataReady(audio_data)) => {
+                    // Store audio data directly in FlowManager
                     if let Some(manager_arc) = flow_manager_weak.upgrade() {
                         tokio::spawn(async move {
                             let mut manager_guard = manager_arc.write().await;
                             if let Some(manager) = manager_guard.as_mut() {
-                                manager.store_wav_data(wav_data);
+                                manager.store_audio_data(audio_data);
                             }
                         });
                     }
@@ -159,21 +159,21 @@ impl FlowManager {
         }
     }
 
-    pub fn store_wav_data(&mut self, wav_data: Vec<u8>) {
-        self.retry_wav_data = Some(wav_data);
+    pub fn store_audio_data(&mut self, audio_data: Vec<u8>) {
+        self.retry_audio_data = Some(audio_data);
     }
 
-    pub fn clear_wav_data(&mut self) {
-        self.retry_wav_data = None;
+    pub fn clear_audio_data(&mut self) {
+        self.retry_audio_data = None;
     }
 
     pub fn has_retry_data(&self) -> bool {
-        self.retry_wav_data.is_some()
+        self.retry_audio_data.is_some()
     }
 
     pub async fn retry_transcription(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState, origin: String) -> Result<(), String> {
-        // Get the stored WAV data
-        let wav_data = self.retry_wav_data.clone().ok_or_else(|| {
+        // Get the stored audio data
+        let audio_data = self.retry_audio_data.clone().ok_or_else(|| {
             "No recorded audio available for retry".to_string()
         })?;
 
@@ -192,7 +192,7 @@ impl FlowManager {
 
         // Start the transcription-only flow in a background task
         tokio::spawn(async move {
-            if let Err(e) = flow_clone.run(FlowMode::TranscribeOnly { wav_data }).await {
+            if let Err(e) = flow_clone.run(FlowMode::TranscribeOnly { audio_data }).await {
                 eprintln!("Retry transcription error: {}", e);
             }
         });

@@ -34,7 +34,7 @@ class MuseVoiceApp {
   private boowompAudio: HTMLAudioElement;
   private bambooHitAudio: HTMLAudioElement;
   private pipeAudio: HTMLAudioElement;
-  
+
   // Audio playback state tracking
   private lastAudioPlayTime: Map<string, number> = new Map();
   private audioPlayCount: Map<string, number> = new Map();
@@ -43,11 +43,11 @@ class MuseVoiceApp {
   private currentSamples: number | null = null;
   private waveformBins: number[] = [];
   private waveformAvgRms: number = 0;
-  
+
   private SIDEBAR_WIDTH = 48;
   private COLLAPSE_WIDTH = 72;
   private COLLAPSE_HEIGHT = 72;
-  
+
   constructor() {
     this.canvas = document.getElementById('status-canvas') as HTMLCanvasElement;
     this.statusLabel = document.getElementById('status-label') as HTMLLabelElement;
@@ -60,46 +60,46 @@ class MuseVoiceApp {
     this.rawChatToggleBtn = document.getElementById('raw-chat-toggle-btn') as HTMLButtonElement;
     this.retryBtn = document.getElementById('retry-btn') as HTMLButtonElement;
     this.appContainer = document.querySelector('.app-container') as HTMLDivElement;
-    
+
     this.ctx = this.canvas.getContext('2d')!;
-    
+
     // Initialize audio with enhanced loading
     this.doneAudio = this.createAudioElement(doneSound, 'done.wav');
     this.boowompAudio = this.createAudioElement(boowompSound, 'boowomp.mp3');
     this.bambooHitAudio = this.createAudioElement(bambooHitSound, 'bamboo_hit.mp3');
     this.pipeAudio = this.createAudioElement(pipeSound, 'pipe.mp3');
-    
+
     this.init();
   }
 
   private createAudioElement(src: string, name: string): HTMLAudioElement {
     console.log(`🎵 Initializing audio element: ${name}`);
     const audio = new Audio(src);
-    
+
     // Enhanced preloading settings
     audio.preload = 'auto';
     audio.volume = 1.0;
-    
+
     // Add event listeners for debugging
     audio.addEventListener('loadstart', () => {
       console.log(`🔄 [${name}] Load started`);
     });
-    
+
     audio.addEventListener('canplaythrough', () => {
       console.log(`✅ [${name}] Can play through (duration: ${audio.duration?.toFixed(2)}s)`);
     });
-    
+
     audio.addEventListener('error', (e) => {
       console.error(`❌ [${name}] Audio error:`, e);
     });
-    
+
     audio.addEventListener('loadeddata', () => {
       console.log(`📊 [${name}] Data loaded (readyState: ${audio.readyState})`);
     });
-    
+
     // Trigger initial load
     audio.load();
-    
+
     return audio;
   }
 
@@ -111,7 +111,7 @@ class MuseVoiceApp {
     this.handleWindowResize(); // Initial check
     this.setupBackendEventListeners();
     this.checkInitialRetryData(); // Check if there's existing retry data
-    
+
     // Initialize button states
     this.initializeButtonStates();
   }
@@ -120,13 +120,13 @@ class MuseVoiceApp {
     try {
       // Import Tauri event system
       const { listen } = await import('@tauri-apps/api/event');
-      
+
       // Listen for flow state changes
       await listen('flow-state-changed', (event: any) => {
         console.log('Flow state changed:', event.payload);
         this.updateFromBackendStatus({ state: event.payload, samples: null });
       });
-      
+
       // Listen for sample count updates
       await listen('sample-count', (event: any) => {
         this.currentSamples = event.payload;
@@ -145,29 +145,27 @@ class MuseVoiceApp {
           this.drawStatusButton();
         }
       });
-      
+
       // Listen for transcription results
       await listen('transcription-result', (event: any) => {
         console.log('Transcription result:', event.payload);
         this.updateTranscription(event.payload);
         this.doneAudio.play().catch(e => console.error("Failed to play done sound:", e));
       });
-      
+
       // Listen for flow errors
       await listen('flow-error', (event: any) => {
         console.error('Flow error:', event.payload);
         this.setStatus('ready');
         // Optionally show error to user
       });
-      
 
-      
       // Listen for retry availability changes
       await listen('retry-available', (event: any) => {
         console.log('Retry available:', event.payload);
         this.setRetryButtonVisibility(event.payload);
       });
-      
+
       // Listen for audio feedback events
       await listen('audio-feedback', (event: any) => {
         console.log('Audio feedback:', event.payload);
@@ -175,7 +173,7 @@ class MuseVoiceApp {
           console.error('Audio feedback handler error:', error);
         });
       });
-      
+
       console.log('Backend event listeners set up');
     } catch (error) {
       console.error('Failed to set up backend event listeners:', error);
@@ -184,7 +182,7 @@ class MuseVoiceApp {
 
   private updateFromBackendStatus(status: StatusResponse): void {
     this.currentSamples = status.samples;
-    
+
     // Handle state changes - map backend states to frontend states
     switch (status.state) {
       case 'idle':
@@ -226,45 +224,45 @@ class MuseVoiceApp {
   private setupEventListeners(): void {
     // Canvas click for record/pause
     this.canvas.addEventListener('click', () => this.handleCanvasClick());
-    
+
     // Close button
     this.closeBtn.addEventListener('click', async () => await this.handleClose());
-    
+
     // Minimize button
     this.minimizeBtn.addEventListener('click', async () => await this.handleMinimize());
-    
+
     // Mode toggle button
     this.modeToggleBtn.addEventListener('click', () => this.handleModeToggle());
-    
+
     // Auto-copy toggle button
     this.rewriteToggleBtn.addEventListener('click', () => this.handleRewriteToggle());
     // Model toggle button
     this.modelToggleBtn.addEventListener('click', () => this.handleModelToggle());
     // RAW/CHAT toggle button
     this.rawChatToggleBtn.addEventListener('click', () => this.handleRawChatToggle());
-    
+
     // Retry button
     this.retryBtn.addEventListener('click', () => this.handleRetryClick());
-    
+
     // Textbox change events (empty as requested)
     this.transcriptionTextbox.addEventListener('input', (e) => this.handleTextboxChange(e));
     this.transcriptionTextbox.addEventListener('keydown', (e) => this.handleTextboxKeydown(e));
-    
+
     // Window resize to handle width-based collapse
     window.addEventListener('resize', () => this.handleWindowResize());
-    
+
     // DPR change detection
     window.matchMedia(`(resolution: ${this.dpr}dppx)`).addEventListener('change', () => {
       this.dpr = window.devicePixelRatio || 1;
       this.setupCanvas();
       this.drawStatusButton();
     });
-    
+
     // Prevent drag on textbox to allow text selection
     this.transcriptionTextbox.addEventListener('mousedown', (e) => {
       e.stopPropagation();
     });
-    
+
     // Global Tab key handler to trigger microphone button
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Tab') {
@@ -315,7 +313,7 @@ class MuseVoiceApp {
     this.rewriteEnabled = !this.rewriteEnabled;
     this.rewriteToggleBtn.textContent = this.rewriteEnabled ? 'Re' : 'No';
     this.rewriteToggleBtn.title = this.rewriteEnabled ? 'Rewrite enabled (Click to disable)' : 'Rewrite disabled (Click to enable)';
-    
+
     // Update button styling to indicate state
     if (this.rewriteEnabled) {
       this.rewriteToggleBtn.style.backgroundColor = 'rgba(99, 102, 241, 0.2)';
@@ -324,7 +322,7 @@ class MuseVoiceApp {
       this.rewriteToggleBtn.style.backgroundColor = 'rgba(99, 102, 241, 0.05)';
       this.rewriteToggleBtn.style.borderColor = 'rgba(99, 102, 241, 0.2)';
     }
-    
+
     // Send the new rewrite setting to the backend
     this.setRewriteEnabled(this.rewriteEnabled);
   }
@@ -372,9 +370,9 @@ class MuseVoiceApp {
   private async playAudioFeedback(soundFile: string): Promise<void> {
     const startTime = performance.now();
     const playId = `${soundFile}-${Date.now()}`;
-    
+
     console.log(`🎵 [${playId}] Audio feedback request: ${soundFile}`);
-    
+
     try {
       // Get audio element
       let audio: HTMLAudioElement;
@@ -400,12 +398,12 @@ class MuseVoiceApp {
         console.log(`⏸️ [${playId}] Debounced (${now - lastPlayTime}ms ago), skipping`);
         return;
       }
-      
+
       // Update tracking
       this.lastAudioPlayTime.set(soundFile, now);
       const playCount = (this.audioPlayCount.get(soundFile) || 0) + 1;
       this.audioPlayCount.set(soundFile, playCount);
-      
+
       console.log(`🎯 [${playId}] Attempting play #${playCount} - Element state:`, {
         readyState: audio.readyState,
         paused: audio.paused,
@@ -414,68 +412,68 @@ class MuseVoiceApp {
         duration: audio.duration,
         networkState: audio.networkState
       });
-      
+
       // Check if audio is ready
       if (audio.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA) {
         console.log(`⏳ [${playId}] Audio not ready (readyState: ${audio.readyState}), waiting...`);
-        
+
         // Wait for audio to be ready
         await new Promise<void>((resolve, reject) => {
           const timeout = setTimeout(() => {
             reject(new Error('Audio loading timeout'));
           }, 3000);
-          
+
           const onCanPlay = () => {
             clearTimeout(timeout);
             audio.removeEventListener('canplaythrough', onCanPlay);
             audio.removeEventListener('error', onError);
             resolve();
           };
-          
+
           const onError = (e: Event) => {
             clearTimeout(timeout);
             audio.removeEventListener('canplaythrough', onCanPlay);
             audio.removeEventListener('error', onError);
             reject(new Error(`Audio loading error: ${e}`));
           };
-          
+
           audio.addEventListener('canplaythrough', onCanPlay);
           audio.addEventListener('error', onError);
-          
+
           // Try loading if not already loaded
           if (audio.readyState === HTMLMediaElement.HAVE_NOTHING) {
             audio.load();
           }
         });
       }
-      
+
       // Stop any current playback and reset
       if (!audio.paused) {
         console.log(`🛑 [${playId}] Stopping current playback`);
         audio.pause();
       }
-      
+
       audio.currentTime = 0;
       console.log(`🔄 [${playId}] Reset audio, ready to play`);
-      
+
       // Attempt to play with retry logic
       let playSuccess = false;
       let lastError: any = null;
-      
+
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           console.log(`▶️ [${playId}] Play attempt #${attempt}`);
-          
+
           const playPromise = audio.play();
           if (playPromise !== undefined) {
             await playPromise;
           }
-          
+
           playSuccess = true;
           const duration = performance.now() - startTime;
           console.log(`✅ [${playId}] Audio played successfully in ${duration.toFixed(1)}ms`);
           break;
-          
+
         } catch (playError: any) {
           lastError = playError;
           console.warn(`⚠️ [${playId}] Play attempt #${attempt} failed:`, {
@@ -483,18 +481,18 @@ class MuseVoiceApp {
             message: playError.message,
             code: playError.code
           });
-          
+
           // Wait a bit before retry
           if (attempt < 3) {
             await new Promise(resolve => setTimeout(resolve, 50 * attempt));
           }
         }
       }
-      
+
       if (!playSuccess) {
         const duration = performance.now() - startTime;
         console.error(`❌ [${playId}] All play attempts failed after ${duration.toFixed(1)}ms:`, lastError);
-        
+
         // Try one last desperate attempt with a fresh load
         try {
           console.log(`🆘 [${playId}] Attempting recovery with fresh load`);
@@ -506,7 +504,7 @@ class MuseVoiceApp {
           console.error(`💀 [${playId}] Recovery also failed:`, recoveryError);
         }
       }
-      
+
     } catch (error: any) {
       const duration = performance.now() - startTime;
       console.error(`💥 [${playId}] Critical audio feedback error after ${duration.toFixed(1)}ms:`, {
@@ -521,7 +519,7 @@ class MuseVoiceApp {
     if (!text.trim()) {
       return;
     }
-    
+
     try {
       // Use invoke to call a backend clipboard command
       await invoke('copy_to_clipboard', { text });
@@ -536,36 +534,36 @@ class MuseVoiceApp {
     const noSpaceAfter = new Set(['(', '[', '{', '"', "'", '`', ' ', '\n', '\t']);
     // Characters that don't need a space before them
     const noSpaceBefore = new Set([')', ']', '}', '.', ',', ';', ':', '!', '?', '"', "'", '`', ' ', '\n', '\t']);
-    
+
     let processedText = text;
     let positionAdjustment = 0;
-    
+
     // Check if we need a space before the insertion
     const charBefore = insertPosition > 0 ? fullText[insertPosition - 1] : '';
     const firstCharOfText = text.length > 0 ? text[0] : '';
-    
-    if (charBefore && 
-        !noSpaceAfter.has(charBefore) && 
-        !noSpaceBefore.has(firstCharOfText) && 
+
+    if (charBefore &&
+        !noSpaceAfter.has(charBefore) &&
+        !noSpaceBefore.has(firstCharOfText) &&
         firstCharOfText !== ' ') {
       processedText = ' ' + processedText;
       positionAdjustment += 1;
     }
-    
+
     // Check if we need a space after the insertion
     const charAfter = insertPosition < fullText.length ? fullText[insertPosition] : '';
     const lastCharOfText = text.length > 0 ? text[text.length - 1] : '';
-    
-    if (charAfter && 
-        !noSpaceBefore.has(charAfter) && 
-        !noSpaceAfter.has(lastCharOfText) && 
+
+    if (charAfter &&
+        !noSpaceBefore.has(charAfter) &&
+        !noSpaceAfter.has(lastCharOfText) &&
         lastCharOfText !== ' ') {
       processedText = processedText + ' ';
     }
-    
-    return { 
-      text: processedText, 
-      adjustedPosition: insertPosition + positionAdjustment 
+
+    return {
+      text: processedText,
+      adjustedPosition: insertPosition + positionAdjustment
     };
   }
 
@@ -588,7 +586,7 @@ class MuseVoiceApp {
     // Set initial rewrite toggle button state
     this.rewriteToggleBtn.textContent = this.rewriteEnabled ? 'Re' : 'No';
     this.rewriteToggleBtn.title = this.rewriteEnabled ? 'Rewrite enabled (Click to disable)' : 'Rewrite disabled (Click to enable)';
-    
+
     // Update button styling to indicate state
     if (this.rewriteEnabled) {
       this.rewriteToggleBtn.style.backgroundColor = 'rgba(99, 102, 241, 0.2)';
@@ -611,14 +609,14 @@ class MuseVoiceApp {
   private handleWindowResize(): void {
     const windowWidth = window.innerWidth;
     const windowHeight = window.innerHeight;
-    
+
     const isHorizontalCollapsed = windowHeight < this.COLLAPSE_HEIGHT;
     const isVerticalCollapsed = !isHorizontalCollapsed && windowWidth < this.COLLAPSE_WIDTH;
     const shouldExpand = !isHorizontalCollapsed && !isVerticalCollapsed;
-    
+
     if (shouldExpand !== this.isExpanded || isHorizontalCollapsed) {
       this.isExpanded = shouldExpand;
-      
+
       if (shouldExpand) {
         this.appContainer.classList.remove('collapsed');
         this.appContainer.classList.remove('h-collapsed');
@@ -674,7 +672,7 @@ class MuseVoiceApp {
 
   public setStatus(status: typeof this.currentStatus): void {
     this.currentStatus = status;
-    
+
     switch (status) {
       case 'loading':
         this.statusLabel.textContent = 'Loading';
@@ -693,7 +691,7 @@ class MuseVoiceApp {
         this.statusLabel.textContent = 'Proc';
         break;
     }
-    
+
     this.drawStatusButton();
   }
 
@@ -706,14 +704,14 @@ class MuseVoiceApp {
     const size = this.SIDEBAR_WIDTH;
     const center = size / 2;
     const radius = 16;
-    
+
     // Clear canvas
     this.ctx.clearRect(0, 0, size, size);
-    
+
     // Set colors based on status
     let fillColor: string;
     let strokeColor: string;
-    
+
     switch (this.currentStatus) {
       case 'loading':
         fillColor = '#9ca3af';
@@ -732,7 +730,7 @@ class MuseVoiceApp {
         strokeColor = '#d97706';
         break;
     }
-    
+
     // Draw circle
     this.ctx.beginPath();
     this.ctx.arc(center, center, radius, 0, 2 * Math.PI);
@@ -741,7 +739,7 @@ class MuseVoiceApp {
     this.ctx.strokeStyle = strokeColor;
     this.ctx.lineWidth = 2;
     this.ctx.stroke();
-    
+
     // Draw icon or waveform based on status
     if (this.currentStatus === 'ready') {
       this.ctx.fillStyle = 'white';
@@ -833,13 +831,13 @@ class MuseVoiceApp {
     this.ctx.beginPath();
     this.ctx.roundRect(center - 3, center - 8, 6, 12, 2);
     this.ctx.fill();
-    
+
     // Microphone stand
     this.ctx.beginPath();
     this.ctx.moveTo(center, center + 4);
     this.ctx.lineTo(center, center + 8);
     this.ctx.stroke();
-    
+
     // Base
     this.ctx.beginPath();
     this.ctx.moveTo(center - 4, center + 8);
@@ -859,28 +857,28 @@ class MuseVoiceApp {
 
   public updateTranscription(text: string): void {
     // Clear retry data on successful transcription is now handled by backend
-    
+
     // Apply CHAT mode post-processing if enabled
     let processedText = text;
     if (this.rawChatMode === 'chat') {
       processedText = this.removeTrailingPunctuation(text);
     }
-    
+
     if (this.insertMode) {
       // Insert mode: insert at current cursor position with smart spacing
       const currentText = this.transcriptionTextbox.value;
       const cursorPosition = this.transcriptionTextbox.selectionStart || 0;
-      
+
       // Apply smart spacing
       const { text: spacedText, adjustedPosition } = this.addSmartSpacing(processedText, cursorPosition, currentText);
-      
+
       // Insert the text at cursor position
       const beforeCursor = currentText.substring(0, cursorPosition);
       const afterCursor = currentText.substring(cursorPosition);
       const newText = beforeCursor + spacedText + afterCursor;
-      
+
       this.transcriptionTextbox.value = newText;
-      
+
       // Position cursor at end of inserted text
       const newCursorPosition = adjustedPosition + spacedText.length;
       this.transcriptionTextbox.setSelectionRange(newCursorPosition, newCursorPosition);
@@ -891,7 +889,7 @@ class MuseVoiceApp {
       const endPosition = processedText.length;
       this.transcriptionTextbox.setSelectionRange(endPosition, endPosition);
     }
-    
+
     // Auto-expand if collapsed and there's new text (only if window is large enough)
     if (
       !this.isExpanded &&
@@ -901,7 +899,7 @@ class MuseVoiceApp {
     ) {
       this.handleWindowResize(); // This will expand if window is wide enough
     }
-    
+
     // Always copy to clipboard (removed toggle functionality)
     this.copyToClipboard(this.transcriptionTextbox.value);
   }

@@ -21,16 +21,18 @@ pub enum FlowState {
     Cancelled,
 }
 
-/// Controls whether the flow should record audio or use existing WAV data
+
+
+/// Controls whether the flow should record audio or use existing audio data
 #[derive(Debug)]
 pub enum FlowMode {
     /// Record audio, then encode and transcribe it
     RecordAndTranscribe {
         stop_signal: oneshot::Receiver<()>,
     },
-    /// Skip recording and encoding, transcribe existing WAV data
+    /// Skip recording and encoding, transcribe existing audio data (WebM format)
     TranscribeOnly {
-        wav_data: Vec<u8>,
+        audio_data: Vec<u8>,
     },
 }
 
@@ -39,8 +41,8 @@ pub enum FlowEvent {
     StateChanged(FlowState),
     SampleCount(usize),
     TranscriptionResult(String),
-    WavFileSaved(String), // Path to the saved WAV file
-    WavDataReady(Vec<u8>), // WAV buffer ready for transcription (for retry functionality)
+    AudioFileSaved(String), // Path to the saved audio file (WebM format)
+    AudioDataReady(Vec<u8>), // Audio buffer ready for transcription (WebM format, for retry functionality)
     WaveformChunk { bins: Vec<f32>, avg_rms: f32 },
     AudioFeedback(String), // Sound file name to play for user feedback
     Error(String),
@@ -128,9 +130,9 @@ impl Flow {
         self.cancellation_token.cancel();
     }
 
-    /// Saves WAV data to $HOME/.musevoice/recording-${unixtime}.wav
+    /// Saves audio data to $HOME/.musevoice/recording-${unixtime}.webm
     /// Returns the full path if successful, or None if it fails gracefully
-    fn save_wav_file(&self, wav_data: &[u8]) -> Option<String> {
+    fn save_audio_file(&self, audio_data: &[u8]) -> Option<String> {
         // Get home directory
         let home_dir = match env::var("HOME") {
             Ok(path) => PathBuf::from(path),
@@ -156,25 +158,25 @@ impl Flow {
             }
         };
 
-        let filename = format!("recording-{}.wav", unix_time);
+        let filename = format!("recording-{}.webm", unix_time);
         let file_path = musevoice_dir.join(&filename);
 
         // Save the WAV data
-        match fs::write(&file_path, wav_data) {
+        match fs::write(&file_path, audio_data) {
             Ok(_) => {
-                println!("Saved WAV file: {:?}", file_path);
+                println!("Saved audio file: {:?}", file_path);
                 file_path.to_string_lossy().to_string().into()
             }
             Err(e) => {
-                eprintln!("Warning: Could not write WAV file {:?}: {}, skipping WAV file save", file_path, e);
+                eprintln!("Warning: Could not write audio file {:?}: {}, skipping audio file save", file_path, e);
                 None
             }
         }
     }
 
-    /// Main flow method: either records and transcribes, or transcribes existing WAV data
+    /// Main flow method: either records and transcribes, or transcribes existing audio data
     pub async fn run(&self, mode: FlowMode) -> Result<(), AudioError> {
-        let wav_data = match mode {
+        let audio_data = match mode {
             FlowMode::RecordAndTranscribe { stop_signal } => {
                 // Set initial state and emit audio feedback for starting recording
                 self.emit_audio_feedback_if_enabled("boowomp.mp3");
@@ -202,9 +204,9 @@ impl Flow {
                 self.emit_audio_feedback_if_enabled("bamboo_hit.mp3");
                 self.set_state(FlowState::Processing).await;
 
-                // Encode audio (sync operation, but fast)
-                let wav_data = match tokio::task::spawn_blocking(move || {
-                    crate::encode::resample_and_encode_wav(recording_data.into(), 24000u32).map_err(|e| e.to_string())
+                // Encode audio as WebM Opus (sync operation, but fast)
+                let audio_data = match tokio::task::spawn_blocking(move || {
+                    crate::encode::resample_and_encode_webm(recording_data, 24000u32, 64000).map_err(|e| e.to_string())
                 })
                 .await
                 {
@@ -236,17 +238,17 @@ impl Flow {
                     return Ok(());
                 }
 
-                // Emit WAV data for potential retry functionality
-                self.emit_event(FlowEvent::WavDataReady(wav_data.clone()));
+                // Emit audio data for potential retry functionality
+                self.emit_event(FlowEvent::AudioDataReady(audio_data.clone()));
 
-                // Save WAV file to disk (fails gracefully if not possible)
-                if let Some(saved_path) = self.save_wav_file(&wav_data) {
-                    self.emit_event(FlowEvent::WavFileSaved(saved_path));
+                // Save audio file to disk (fails gracefully if not possible)
+                if let Some(saved_path) = self.save_audio_file(&audio_data) {
+                    self.emit_event(FlowEvent::AudioFileSaved(saved_path));
                 }
 
-                wav_data
+                audio_data
             }
-            FlowMode::TranscribeOnly { wav_data } => {
+            FlowMode::TranscribeOnly { audio_data } => {
                 // Set to processing state
                 self.set_state(FlowState::Processing).await;
 
@@ -257,12 +259,12 @@ impl Flow {
                     return Ok(());
                 }
 
-                wav_data
+                audio_data
             }
         };
 
         // Transcribe with OpenAI
-        let mut transcribed_text = match self.transcribe_audio(wav_data).await {
+        let mut transcribed_text = match self.transcribe_audio(audio_data).await {
             Ok(text) => text,
             Err(e) => {
                 self.emit_audio_feedback_if_enabled("pipe.mp3");
@@ -681,7 +683,7 @@ impl Flow {
         Ok(rewritten_text)
     }
 
-    async fn transcribe_audio(&self, wav_data: Vec<u8>) -> Result<String, AudioError> {
+    async fn transcribe_audio(&self, audio_data: Vec<u8>) -> Result<String, AudioError> {
         let api_key = env::var("OPENAI_API_KEY").map_err(|_| AudioError {
             message: "OPENAI_API_KEY environment variable not set".to_string(),
         })?;
@@ -702,9 +704,9 @@ impl Flow {
         let form = reqwest::multipart::Form::new()
             .part(
                 "file",
-                reqwest::multipart::Part::bytes(wav_data)
-                    .file_name("audio.wav")
-                    .mime_str("audio/wav")
+                reqwest::multipart::Part::bytes(audio_data)
+                    .file_name("audio.webm")
+                    .mime_str("audio/webm")
                     .map_err(|e| AudioError {
                         message: format!("Failed to create file part: {}", e),
                     })?,

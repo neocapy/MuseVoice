@@ -1,0 +1,3 @@
+[submodule "src-tauri/opus"]
+	path = src-tauri/opus
+	url = https://gitlab.xiph.org/xiph/opus.git
