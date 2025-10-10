@@ -21,6 +21,19 @@ pub enum FlowState {
     Cancelled,
 }
 
+/// Controls whether the flow should record audio or use existing WAV data
+#[derive(Debug)]
+pub enum FlowMode {
+    /// Record audio, then encode and transcribe it
+    RecordAndTranscribe {
+        stop_signal: oneshot::Receiver<()>,
+    },
+    /// Skip recording and encoding, transcribe existing WAV data
+    TranscribeOnly {
+        wav_data: Vec<u8>,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum FlowEvent {
     StateChanged(FlowState),
@@ -159,15 +172,98 @@ impl Flow {
         }
     }
 
-    /// Main flow method: starts recording, waits for stop signal, then transcribes
-    pub async fn run(&self, stop_signal: oneshot::Receiver<()>) -> Result<(), AudioError> {
-        // Set initial state and emit audio feedback for starting recording
-        self.emit_audio_feedback_if_enabled("boowomp.mp3");
-        self.set_state(FlowState::Recording).await;
+    /// Main flow method: either records and transcribes, or transcribes existing WAV data
+    pub async fn run(&self, mode: FlowMode) -> Result<(), AudioError> {
+        let wav_data = match mode {
+            FlowMode::RecordAndTranscribe { stop_signal } => {
+                // Set initial state and emit audio feedback for starting recording
+                self.emit_audio_feedback_if_enabled("boowomp.mp3");
+                self.set_state(FlowState::Recording).await;
 
-        // Start audio recording
-        let recording_data = match self.record_audio(stop_signal).await {
-            Ok(data) => data,
+                // Start audio recording
+                let recording_data = match self.record_audio(stop_signal).await {
+                    Ok(data) => data,
+                    Err(e) => {
+                        self.emit_audio_feedback_if_enabled("pipe.mp3");
+                        self.set_state(FlowState::Error).await;
+                        self.emit_event(FlowEvent::Error(e.message.clone()));
+                        return Err(e);
+                    }
+                };
+
+                // Check if cancelled during recording
+                if self.cancellation_token.is_cancelled() {
+                    self.emit_audio_feedback_if_enabled("pipe.mp3");
+                    self.set_state(FlowState::Cancelled).await;
+                    return Ok(());
+                }
+
+                // Recording finished - emit bamboo hit sound and move to processing state
+                self.emit_audio_feedback_if_enabled("bamboo_hit.mp3");
+                self.set_state(FlowState::Processing).await;
+
+                // Encode audio (sync operation, but fast)
+                let wav_data = match tokio::task::spawn_blocking(move || {
+                    crate::encode::resample_and_encode_wav(recording_data.into(), 24000u32).map_err(|e| e.to_string())
+                })
+                .await
+                {
+                    Ok(Ok(data)) => data,
+                    Ok(Err(e)) => {
+                        let error = AudioError {
+                            message: format!("Encoding error: {}", e),
+                        };
+                        self.emit_audio_feedback_if_enabled("pipe.mp3");
+                        self.set_state(FlowState::Error).await;
+                        self.emit_event(FlowEvent::Error(error.message.clone()));
+                        return Err(error);
+                    }
+                    Err(e) => {
+                        let error = AudioError {
+                            message: format!("Task join error: {}", e),
+                        };
+                        self.emit_audio_feedback_if_enabled("pipe.mp3");
+                        self.set_state(FlowState::Error).await;
+                        self.emit_event(FlowEvent::Error(error.message.clone()));
+                        return Err(error);
+                    }
+                };
+
+                // Check if cancelled during encoding
+                if self.cancellation_token.is_cancelled() {
+                    self.emit_audio_feedback_if_enabled("pipe.mp3");
+                    self.set_state(FlowState::Cancelled).await;
+                    return Ok(());
+                }
+
+                // Emit WAV data for potential retry functionality
+                self.emit_event(FlowEvent::WavDataReady(wav_data.clone()));
+
+                // Save WAV file to disk (fails gracefully if not possible)
+                if let Some(saved_path) = self.save_wav_file(&wav_data) {
+                    self.emit_event(FlowEvent::WavFileSaved(saved_path));
+                }
+
+                wav_data
+            }
+            FlowMode::TranscribeOnly { wav_data } => {
+                // Set to processing state
+                self.set_state(FlowState::Processing).await;
+
+                // Check if cancelled
+                if self.cancellation_token.is_cancelled() {
+                    self.emit_audio_feedback_if_enabled("pipe.mp3");
+                    self.set_state(FlowState::Cancelled).await;
+                    return Ok(());
+                }
+
+                wav_data
+            }
+        };
+
+        // Transcribe with OpenAI
+        let mut transcribed_text = match self.transcribe_audio(wav_data).await {
+            Ok(text) => text,
             Err(e) => {
                 self.emit_audio_feedback_if_enabled("pipe.mp3");
                 self.set_state(FlowState::Error).await;
@@ -176,134 +272,28 @@ impl Flow {
             }
         };
 
-        // Check if cancelled during recording
-        if self.cancellation_token.is_cancelled() {
-            self.emit_audio_feedback_if_enabled("pipe.mp3");
-            self.set_state(FlowState::Cancelled).await;
-            return Ok(());
-        }
-
-        // Recording finished - emit bamboo hit sound and move to processing state
-        self.emit_audio_feedback_if_enabled("bamboo_hit.mp3");
-        self.set_state(FlowState::Processing).await;
-
-        // Encode audio (sync operation, but fast)
-        let wav_data = match tokio::task::spawn_blocking(move || {
-            crate::encode::resample_and_encode_wav(recording_data.into(), 24000u32).map_err(|e| e.to_string())
-        })
-        .await
-        {
-            Ok(Ok(data)) => data,
-            Ok(Err(e)) => {
-                let error = AudioError {
-                    message: format!("Encoding error: {}", e),
-                };
-                self.emit_audio_feedback_if_enabled("pipe.mp3");
-                self.set_state(FlowState::Error).await;
-                self.emit_event(FlowEvent::Error(error.message.clone()));
-                return Err(error);
-            }
-            Err(e) => {
-                let error = AudioError {
-                    message: format!("Task join error: {}", e),
-                };
-                self.emit_audio_feedback_if_enabled("pipe.mp3");
-                self.set_state(FlowState::Error).await;
-                self.emit_event(FlowEvent::Error(error.message.clone()));
-                return Err(error);
-            }
-        };
-
-        // Check if cancelled during encoding
-        if self.cancellation_token.is_cancelled() {
-            self.emit_audio_feedback_if_enabled("pipe.mp3");
-            self.set_state(FlowState::Cancelled).await;
-            return Ok(());
-        }
-
-        // Emit WAV data for potential retry functionality
-        self.emit_event(FlowEvent::WavDataReady(wav_data.clone()));
-
-        // Save WAV file to disk (fails gracefully if not possible)
-        if let Some(saved_path) = self.save_wav_file(&wav_data) {
-            self.emit_event(FlowEvent::WavFileSaved(saved_path));
-        }
-
-        // Transcribe with OpenAI
-        match self.transcribe_audio(wav_data).await {
-            Ok(mut transcribed_text) => {
-                // Apply rewriting if enabled
-                if self.rewrite_enabled {
-                    println!("Rewrite enabled, attempting to rewrite transcribed text...");
-                    match self.rewrite_transcribed_text(&transcribed_text).await {
-                        Ok(rewritten_text) => {
-                            println!("Rewrite successful");
-                            transcribed_text = rewritten_text;
-                        }
-                        Err(e) => {
-                            // Soft fail: just print error and continue with original text
-                            eprintln!("Rewrite failed, using original transcription: {}", e.message);
-                            // Could emit a status event here for the UI to show rewrite failed
-                        }
-                    }
+        // Apply rewriting if enabled
+        if self.rewrite_enabled {
+            println!("Rewrite enabled, attempting to rewrite transcribed text...");
+            match self.rewrite_transcribed_text(&transcribed_text).await {
+                Ok(rewritten_text) => {
+                    println!("Rewrite successful");
+                    transcribed_text = rewritten_text;
                 }
-                
-                self.set_state(FlowState::Completed).await;
-                self.emit_event(FlowEvent::TranscriptionResult(transcribed_text));
-                Ok(())
-            }
-            Err(e) => {
-                self.emit_audio_feedback_if_enabled("pipe.mp3");
-                self.set_state(FlowState::Error).await;
-                self.emit_event(FlowEvent::Error(e.message.clone()));
-                Err(e)
+                Err(e) => {
+                    // Soft fail: just print error and continue with original text
+                    eprintln!("Rewrite failed, using original transcription: {}", e.message);
+                    // Could emit a status event here for the UI to show rewrite failed
+                }
             }
         }
+
+        self.set_state(FlowState::Completed).await;
+        self.emit_event(FlowEvent::TranscriptionResult(transcribed_text));
+        Ok(())
     }
 
-    /// Retry transcription with existing WAV data (skips recording and encoding)
-    pub async fn run_transcription_only(&self, wav_data: Vec<u8>) -> Result<(), AudioError> {
-        // Set to processing state
-        self.set_state(FlowState::Processing).await;
 
-        // Check if cancelled
-        if self.cancellation_token.is_cancelled() {
-            self.emit_audio_feedback_if_enabled("pipe.mp3");
-            self.set_state(FlowState::Cancelled).await;
-            return Ok(());
-        }
-
-        // Transcribe with OpenAI
-        match self.transcribe_audio(wav_data).await {
-            Ok(mut transcribed_text) => {
-                // Apply rewriting if enabled
-                if self.rewrite_enabled {
-                    println!("Rewrite enabled, attempting to rewrite transcribed text...");
-                    match self.rewrite_transcribed_text(&transcribed_text).await {
-                        Ok(rewritten_text) => {
-                            println!("Rewrite successful");
-                            transcribed_text = rewritten_text;
-                        }
-                        Err(e) => {
-                            // Soft fail: just print error and continue with original text
-                            eprintln!("Rewrite failed, using original transcription: {}", e.message);
-                            // Could emit a status event here for the UI to show rewrite failed
-                        }
-                    }
-                }
-                
-                self.set_state(FlowState::Completed).await;
-                self.emit_event(FlowEvent::TranscriptionResult(transcribed_text));
-                Ok(())
-            }
-            Err(e) => {
-                self.emit_audio_feedback_if_enabled("pipe.mp3");
-                self.set_state(FlowState::Error).await;
-                self.emit_event(FlowEvent::Error(e.message.clone()));
-                Err(e)
-            }
-        }
-    }
 
     async fn record_audio(
         &self,
@@ -601,7 +591,7 @@ impl Flow {
             \n\
             Original text: {}\n\
             \n\
-            Return ONLY the corrected text, no explanations or formatting:", 
+            Return ONLY the corrected text, no explanations or formatting:",
             transcribed_text
         );
 
@@ -666,9 +656,9 @@ impl Flow {
         let response_text = response.text().await.map_err(|e| AudioError {
             message: format!("Failed to get response text: {}", e),
         })?;
-        
+
         println!("Raw GPT-5 response: {}", response_text);
-        
+
         // Try to parse it
         let gpt_response: GPTResponse = serde_json::from_str(&response_text).map_err(|e| AudioError {
             message: format!("Failed to parse rewrite response: {} | Raw response: {}", e, response_text),
