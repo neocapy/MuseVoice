@@ -204,9 +204,7 @@ impl WebmWriter {
     fn process_encoded_frames(&mut self) -> Result<(), OpusError> {
         let frames = self.encoder.take_frames();
         
-        if !frames.is_empty() {
-            println!("[WebmWriter] Processing {} Opus frame(s)", frames.len());
-        }
+
 
         for frame in frames {
             self.write_opus_frame(&frame)?;

@@ -137,11 +137,7 @@ impl AudioStreamProcessor {
             // Bypass resampling: feed input directly
             self.samples_resampled += input_size;
             self.webm_writer.add_samples_f32(chunk)?;
-            println!(
-                "[AudioStreamProcessor] Chunk #{}: {} samples passthrough (ratio: 1.000000, expected: 1.000000, diff: +0.000%)",
-                self.chunks_processed + 1,
-                input_size
-            );
+
         }
 
         self.chunks_processed += 1;

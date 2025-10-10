@@ -6,7 +6,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{oneshot, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -289,6 +289,7 @@ impl Flow {
                 sample_sender,
                 stop_receiver,
                 audio_result_sender,
+                callback.clone(),
             )
         });
 
@@ -442,6 +443,7 @@ Ok(webm_data)
         sample_sender: crossbeam_channel::Sender<Vec<f32>>,
         stop_receiver: oneshot::Receiver<()>,
         result_sender: oneshot::Sender<Result<(), String>>,
+        callback: FlowCallback,
     ) {
         let result = (|| -> Result<(), String> {
             let channels = config.channels;
@@ -467,11 +469,21 @@ Ok(webm_data)
             let recording_active = Arc::new(AtomicBool::new(true));
             let recording_active_clone = Arc::clone(&recording_active);
 
+            // Waveform computation state
+            let waveform_buf = Arc::new(Mutex::new(Vec::<f32>::new()));
+            let total_mono_captured = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            const WINDOW_SIZE: usize = 2048;
+            const BIN_SIZE: usize = 8;
+
             let total_cap_f32 = total_captured_clone.clone();
             let stream = match sample_format {
                 SampleFormat::F32 => {
                     let first_callback = Arc::new(AtomicBool::new(true));
                     let first_callback_clone = first_callback.clone();
+                    // Clones for callback and waveform state
+                    let cb = callback.clone();
+                    let wf_buf = waveform_buf.clone();
+                    let mono_count_f32 = total_mono_captured.clone();
                     device.build_input_stream(
                         &config,
                         move |data: &[f32], _: &cpal::InputCallbackInfo| {
@@ -483,6 +495,40 @@ Ok(webm_data)
                                 }
                                 total_cap_f32.fetch_add(data.len(), Ordering::Relaxed);
                                 let mono_data = Self::mix_to_mono(data, channels);
+
+                                // Update mono sample count and emit
+                                mono_count_f32.fetch_add(mono_data.len(), Ordering::Relaxed);
+                                let count = mono_count_f32.load(Ordering::Relaxed);
+                                (cb)(FlowEvent::SampleCount(count));
+
+                                // Accumulate and emit waveform bins per 2048-sample window
+                                {
+                                    let mut buf = wf_buf.lock().unwrap();
+                                    buf.extend_from_slice(&mono_data);
+                                    while buf.len() >= WINDOW_SIZE {
+                                        let window = &buf[..WINDOW_SIZE];
+
+                                        // Compute bins (256 bins of 8 samples RMS) and avg RMS
+                                        let mut bins: Vec<f32> = Vec::with_capacity(WINDOW_SIZE / BIN_SIZE);
+                                        let mut sum_sq_total: f32 = 0.0;
+                                        for chunk in window.chunks(BIN_SIZE) {
+                                            let mut sum_sq = 0.0f32;
+                                            for &s in chunk {
+                                                let ss = s * s;
+                                                sum_sq += ss;
+                                                sum_sq_total += ss;
+                                            }
+                                            bins.push((sum_sq / BIN_SIZE as f32).sqrt());
+                                        }
+                                        let avg_rms = (sum_sq_total / WINDOW_SIZE as f32).sqrt();
+
+                                        (cb)(FlowEvent::WaveformChunk { bins, avg_rms });
+
+                                        // Remove processed window
+                                        buf.drain(..WINDOW_SIZE);
+                                    }
+                                }
+
                                 let _ = sample_sender.send(mono_data);
                             }
                         },
@@ -494,6 +540,10 @@ Ok(webm_data)
                     let total_cap_i16 = total_captured_clone.clone();
                     let first_callback = Arc::new(AtomicBool::new(true));
                     let first_callback_clone = first_callback.clone();
+                    // Clones for callback and waveform state
+                    let cb = callback.clone();
+                    let wf_buf = waveform_buf.clone();
+                    let mono_count_i16 = total_mono_captured.clone();
                     device.build_input_stream(
                         &config,
                         move |data: &[i16], _: &cpal::InputCallbackInfo| {
@@ -507,6 +557,40 @@ Ok(webm_data)
                                 let float_data: Vec<f32> =
                                     data.iter().map(|&s| s.to_sample::<f32>()).collect();
                                 let mono_data = Self::mix_to_mono(&float_data, channels);
+
+                                // Update mono sample count and emit
+                                mono_count_i16.fetch_add(mono_data.len(), Ordering::Relaxed);
+                                let count = mono_count_i16.load(Ordering::Relaxed);
+                                (cb)(FlowEvent::SampleCount(count));
+
+                                // Accumulate and emit waveform bins per 2048-sample window
+                                {
+                                    let mut buf = wf_buf.lock().unwrap();
+                                    buf.extend_from_slice(&mono_data);
+                                    while buf.len() >= WINDOW_SIZE {
+                                        let window = &buf[..WINDOW_SIZE];
+
+                                        // Compute bins (256 bins of 8 samples RMS) and avg RMS
+                                        let mut bins: Vec<f32> = Vec::with_capacity(WINDOW_SIZE / BIN_SIZE);
+                                        let mut sum_sq_total: f32 = 0.0;
+                                        for chunk in window.chunks(BIN_SIZE) {
+                                            let mut sum_sq = 0.0f32;
+                                            for &s in chunk {
+                                                let ss = s * s;
+                                                sum_sq += ss;
+                                                sum_sq_total += ss;
+                                            }
+                                            bins.push((sum_sq / BIN_SIZE as f32).sqrt());
+                                        }
+                                        let avg_rms = (sum_sq_total / WINDOW_SIZE as f32).sqrt();
+
+                                        (cb)(FlowEvent::WaveformChunk { bins, avg_rms });
+
+                                        // Remove processed window
+                                        buf.drain(..WINDOW_SIZE);
+                                    }
+                                }
+
                                 let _ = sample_sender.send(mono_data);
                             }
                         },
@@ -518,6 +602,10 @@ Ok(webm_data)
                     let total_cap_i32 = total_captured_clone.clone();
                     let first_callback = Arc::new(AtomicBool::new(true));
                     let first_callback_clone = first_callback.clone();
+                    // Clones for callback and waveform state
+                    let cb = callback.clone();
+                    let wf_buf = waveform_buf.clone();
+                    let mono_count_i32 = total_mono_captured.clone();
                     device.build_input_stream(
                         &config,
                         move |data: &[i32], _: &cpal::InputCallbackInfo| {
@@ -531,6 +619,40 @@ Ok(webm_data)
                                 let float_data: Vec<f32> =
                                     data.iter().map(|&s| s.to_sample::<f32>()).collect();
                                 let mono_data = Self::mix_to_mono(&float_data, channels);
+
+                                // Update mono sample count and emit
+                                mono_count_i32.fetch_add(mono_data.len(), Ordering::Relaxed);
+                                let count = mono_count_i32.load(Ordering::Relaxed);
+                                (cb)(FlowEvent::SampleCount(count));
+
+                                // Accumulate and emit waveform bins per 2048-sample window
+                                {
+                                    let mut buf = wf_buf.lock().unwrap();
+                                    buf.extend_from_slice(&mono_data);
+                                    while buf.len() >= WINDOW_SIZE {
+                                        let window = &buf[..WINDOW_SIZE];
+
+                                        // Compute bins (256 bins of 8 samples RMS) and avg RMS
+                                        let mut bins: Vec<f32> = Vec::with_capacity(WINDOW_SIZE / BIN_SIZE);
+                                        let mut sum_sq_total: f32 = 0.0;
+                                        for chunk in window.chunks(BIN_SIZE) {
+                                            let mut sum_sq = 0.0f32;
+                                            for &s in chunk {
+                                                let ss = s * s;
+                                                sum_sq += ss;
+                                                sum_sq_total += ss;
+                                            }
+                                            bins.push((sum_sq / BIN_SIZE as f32).sqrt());
+                                        }
+                                        let avg_rms = (sum_sq_total / WINDOW_SIZE as f32).sqrt();
+
+                                        (cb)(FlowEvent::WaveformChunk { bins, avg_rms });
+
+                                        // Remove processed window
+                                        buf.drain(..WINDOW_SIZE);
+                                    }
+                                }
+
                                 let _ = sample_sender.send(mono_data);
                             }
                         },

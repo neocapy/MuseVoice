@@ -759,11 +759,11 @@ class MuseVoiceApp {
 
   private drawRecordingWaveform(center: number, radius: number): void {
     const ctx = this.ctx;
-    const bins = this.waveformBins && this.waveformBins.length > 0 ? this.waveformBins : new Array(128).fill(0);
+    const bins = this.waveformBins && this.waveformBins.length > 0 ? this.waveformBins : new Array(256).fill(0);
     const rmsToDbScale = (r: number): number => {
       const eps = 1e-8;
       const db = 20 * Math.log10(Math.max(r, eps));
-      const t = (db + 30) / 30; // -30 dB -> 0, 0 dB -> 1
+      const t = (db + 40) / 40; // -40 dB -> 0, 0 dB -> 1
       return Math.max(0, Math.min(1, t));
     };
     const avg = rmsToDbScale(this.waveformAvgRms || 0);
