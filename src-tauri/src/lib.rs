@@ -166,7 +166,7 @@ async fn copy_to_clipboard(text: String, app_handle: AppHandle) -> Result<String
 fn get_default_shortcut() -> &'static str {
     #[cfg(target_os = "macos")]
     return "Alt+Slash";
-    
+
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     return "Alt+Slash";
 }
@@ -175,13 +175,13 @@ fn get_default_shortcut() -> &'static str {
 fn get_shortcut_from_env() -> String {
     #[cfg(target_os = "macos")]
     let env_key = "MUSE_SHORTCUT_MACOS";
-    
+
     #[cfg(target_os = "windows")]
     let env_key = "MUSE_SHORTCUT_WINDOWS";
-    
+
     #[cfg(target_os = "linux")]
     let env_key = "MUSE_SHORTCUT_LINUX";
-    
+
     std::env::var(env_key).unwrap_or_else(|_| get_default_shortcut().to_string())
 }
 
@@ -191,10 +191,10 @@ fn parse_shortcut(shortcut_str: &str) -> Result<Shortcut, String> {
     if parts.is_empty() {
         return Err("Empty shortcut string".to_string());
     }
-    
+
     let mut modifiers = Modifiers::empty();
     let mut key_code = None;
-    
+
     for part in &parts {
         match part.to_lowercase().as_str() {
             "ctrl" | "control" => modifiers |= Modifiers::CONTROL,
@@ -243,7 +243,7 @@ fn parse_shortcut(shortcut_str: &str) -> Result<Shortcut, String> {
             }
         }
     }
-    
+
     match key_code {
         Some(code) => Ok(Shortcut::new(Some(modifiers), code)),
         None => Err("No key code found in shortcut".to_string()),
@@ -280,28 +280,28 @@ pub fn run() {
             {
                 let shortcut_string = get_shortcut_from_env();
                 println!("Setting up global shortcut: {}", shortcut_string);
-                
+
                 match parse_shortcut(&shortcut_string) {
                     Ok(shortcut) => {
                         let flow_manager_for_handler = flow_manager.clone();
                         let app_handle_for_handler = app.handle().clone();
-                        
+
                         let handler_result = app.handle().plugin(
                             tauri_plugin_global_shortcut::Builder::new()
                                 .with_handler(move |_app, _triggered_shortcut, event| {
                                     if event.state() == ShortcutState::Pressed {
                                         let flow_manager_clone = flow_manager_for_handler.clone();
                                         let app_handle_clone = app_handle_for_handler.clone();
-                                        
+
                                         // Spawn async task to handle the shortcut
                                         tauri::async_runtime::spawn(async move {
                                             // Get current flow state and determine action
                                             let manager_guard = flow_manager_clone.read().await;
-                                            
+
                                             if let Some(manager) = manager_guard.as_ref() {
                                                 let current_state = manager.get_state().await;
                                                 drop(manager_guard); // Release the read lock
-                                                
+
                                                 match current_state {
                                                     FlowState::Idle | FlowState::Completed | FlowState::Error | FlowState::Cancelled => {
                                                         // Start recording - play boowomp.mp3
@@ -348,7 +348,7 @@ pub fn run() {
                                 })
                                 .build()
                         );
-                        
+
                         match handler_result {
                             Ok(_) => {
                                 // Register the shortcut
@@ -362,13 +362,6 @@ pub fn run() {
                     }
                     Err(e) => eprintln!("❌ Failed to parse shortcut '{}': {}", shortcut_string, e),
                 }
-            }
-            
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
-                    width: 270.0,
-                    height: 48.0,
-                }));
             }
 
             // Initialize the flow manager in an async context

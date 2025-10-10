@@ -10,10 +10,6 @@ import pipeSound from "./sounds/pipe.mp3";
 import { StatusCanvas } from "./components/StatusCanvas";
 import { useBackendListeners } from "./hooks/useBackendListeners";
 
-// Constants
-const COLLAPSE_WIDTH = 72;
-const COLLAPSE_HEIGHT = 72;
-
 type FrontendStatus = "loading" | "ready" | "recording" | "processing";
 type Model = "whisper-1" | "gpt-4o-transcribe";
 type RawChatMode = "raw" | "chat";
@@ -50,7 +46,8 @@ function addSmartSpacing(text: string, insertPosition: number, fullText: string)
     processedText = processedText + " ";
   }
 
-  return { text: processedText, adjustedPosition: insertPosition + positionAdjustment };
+  return { text: processedText, adjustedPosition: insertPosition + positionAdjustment
+ };
 }
 
 function removeTrailingPunctuation(text: string): string {
@@ -70,34 +67,11 @@ function useDpr() {
   return dpr;
 }
 
-function computeLayoutMode(winW: number, winH: number): "expanded" | "collapsed" | "h-collapsed" {
-  const isHorizontalCollapsed = winH < COLLAPSE_HEIGHT;
-  const isVerticalCollapsed = !isHorizontalCollapsed && winW < COLLAPSE_WIDTH;
-  if (!isHorizontalCollapsed && !isVerticalCollapsed) return "expanded";
-  if (isHorizontalCollapsed) return "h-collapsed";
-  return "collapsed";
-}
-
-function useLayoutMode() {
-  const [mode, setMode] = useState<"expanded" | "collapsed" | "h-collapsed">(
-    computeLayoutMode(window.innerWidth, window.innerHeight)
-  );
-
-  useEffect(() => {
-    const onResize = () => setMode(computeLayoutMode(window.innerWidth, window.innerHeight));
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  return [mode, setMode] as const;
-}
-
 export default function App() {
-  // State (React-driven)
+  // State
   const [status, setStatus] = useState<FrontendStatus>("loading");
-  const [insertMode, setInsertMode] = useState<boolean>(false);
   const [rewriteEnabled, setRewriteEnabled] = useState<boolean>(false);
-  const [model, setModel] = useState<Model>("whisper-1");
+  const [model, setModel] = useState<Model>("gpt-4o-transcribe");
   const [rawChatMode, setRawChatMode] = useState<RawChatMode>("raw");
   const [retryVisible, setRetryVisible] = useState<boolean>(false);
 
@@ -106,14 +80,10 @@ export default function App() {
   const [waveformAvgRms, setWaveformAvgRms] = useState<number>(0);
 
   const [transcriptionText, setTranscriptionText] = useState<string>("");
+  const [contextMenuVisible, setContextMenuVisible] = useState<boolean>(false);
+  const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  const [layoutMode, setLayoutMode] = useLayoutMode();
-  const isExpanded = layoutMode === "expanded";
-
-  // Refs
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-
-  // DPR handling for canvas resolution
   const dpr = useDpr();
 
   // Audio elements
@@ -142,20 +112,6 @@ export default function App() {
     return a;
   }, []);
 
-  // Update root classes based on layout mode (keep exact CSS behavior)
-  useEffect(() => {
-    const root = document.getElementById("root");
-    if (!root) return;
-
-    // Ensure base class
-    if (!root.classList.contains("app-container")) {
-      root.classList.add("app-container");
-    }
-
-    root.classList.remove("expanded", "collapsed", "h-collapsed");
-    root.classList.add(layoutMode);
-  }, [layoutMode]);
-
   // Initial status
   useEffect(() => {
     setStatus("ready");
@@ -171,6 +127,17 @@ export default function App() {
       }
     })();
   }, [rewriteEnabled]);
+
+  // Model -> backend
+  useEffect(() => {
+    (async () => {
+      try {
+        await invoke("set_transcription_model", { model });
+      } catch (e) {
+        console.error("Failed to set model:", e);
+      }
+    })();
+  }, [model]);
 
   // Retry availability on load
   useEffect(() => {
@@ -194,28 +161,18 @@ export default function App() {
     }
   }, []);
 
-  // Textarea change
-  const onTextareaChange = useCallback(
-    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      const val = e.target.value;
-      setTranscriptionText(val);
-      copyToClipboard(val);
-    },
-    [copyToClipboard]
-  );
-
-  // Backend event listeners
+  // Backend event listeners - pass insertMode=false since we're always replacing
   useBackendListeners({
-    insertMode,
+    insertMode: false,
     rawChatMode,
     transcriptionText,
-    isExpanded,
+    isExpanded: false,
     setStatus,
     setCurrentSamples,
     setWaveformBins,
     setWaveformAvgRms,
     setTranscriptionText,
-    setLayoutMode,
+    setLayoutMode: () => {},
     setRetryVisible,
     doneAudio,
     boowompAudio,
@@ -227,8 +184,8 @@ export default function App() {
     removeTrailingPunctuation,
   });
 
-  // Microphone button (canvas) click behavior
-  const handleMicClick = useCallback(async () => {
+  // Main canvas click behavior (start/stop recording)
+  const handleCanvasClick = useCallback(async () => {
     if (status === "ready") {
       try {
         setStatus("recording");
@@ -256,19 +213,19 @@ export default function App() {
     }
   }, [status]);
 
-  // Global Tab key triggers microphone click
+  // Global Tab key triggers canvas click
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Tab") {
         e.preventDefault();
-        handleMicClick();
+        handleCanvasClick();
       }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [handleMicClick]);
+  }, [handleCanvasClick]);
 
-  // Derived status label
+  // Status label text
   const statusLabelText = (() => {
     switch (status) {
       case "loading":
@@ -284,7 +241,25 @@ export default function App() {
     }
   })();
 
-  // Button handlers
+  // Context menu handlers
+  const onContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenuPos({ x: e.clientX, y: e.clientY });
+    setContextMenuVisible(true);
+  }, []);
+
+  const closeContextMenu = useCallback(() => {
+    setContextMenuVisible(false);
+  }, []);
+
+  useEffect(() => {
+    if (contextMenuVisible) {
+      const handler = () => closeContextMenu();
+      document.addEventListener("click", handler);
+      return () => document.removeEventListener("click", handler);
+    }
+  }, [contextMenuVisible, closeContextMenu]);
+
   const onClose = useCallback(async () => {
     try {
       await getCurrentWindow().close();
@@ -301,27 +276,20 @@ export default function App() {
     }
   }, []);
 
-  const onModeToggle = useCallback(() => {
-    setInsertMode((prev) => !prev);
-  }, []);
-
   const onRewriteToggle = useCallback(() => {
     setRewriteEnabled((prev) => !prev);
-  }, []);
+    closeContextMenu();
+  }, [closeContextMenu]);
 
-  const onModelToggle = useCallback(async () => {
-    setModel((prev) => {
-      const next: Model = prev === "whisper-1" ? "gpt-4o-transcribe" : "whisper-1";
-      invoke("set_transcription_model", { model: next }).catch((e) => {
-        console.error("Failed to set model:", e);
-      });
-      return next;
-    });
-  }, []);
+  const onModelToggle = useCallback(() => {
+    setModel((prev) => (prev === "whisper-1" ? "gpt-4o-transcribe" : "whisper-1"));
+    closeContextMenu();
+  }, [closeContextMenu]);
 
   const onRawChatToggle = useCallback(() => {
     setRawChatMode((prev) => (prev === "raw" ? "chat" : "raw"));
-  }, []);
+    closeContextMenu();
+  }, [closeContextMenu]);
 
   const onRetry = useCallback(async () => {
     try {
@@ -333,108 +301,100 @@ export default function App() {
     }
   }, []);
 
-  // Rewrite button styling to match imperative code
-  const rewriteBtnStyle: React.CSSProperties = useMemo(() => {
-    return rewriteEnabled
-      ? {
-          backgroundColor: "rgba(99, 102, 241, 0.2)",
-          borderColor: "rgba(99, 102, 241, 0.6)",
-        }
-      : {
-          backgroundColor: "rgba(99, 102, 241, 0.05)",
-          borderColor: "rgba(99, 102, 241, 0.2)",
-        };
-  }, [rewriteEnabled]);
+  // Helper to position buttons radially
+  // heading in degrees: 0=top, 90=right, 180=bottom, 270=left
+  const radialPosition = (heading: number, radius: number) => {
+    const rad = (heading - 90) * (Math.PI / 180); // -90 to make 0 degrees = top
+    const x = 50 + radius * Math.cos(rad); // 64 = center of 128px window
+    const y = 50 + radius * Math.sin(rad);
+    return { left: `${x}px`, top: `${y}px` };
+  };
 
-  // Render EXACT same subtree as in index.html under #root (no extra wrapper)
   return (
-    <>
-      {/* Left Sidebar */}
-      <div className="sidebar">
-        <div className="drag-handle" data-tauri-drag-region title="Drag to move window"></div>
-        <div className="sidebar-content">
-          <StatusCanvas
-            status={status}
-            waveformBins={waveformBins}
-            waveformAvgRms={waveformAvgRms}
-            dpr={dpr}
-            onClick={handleMicClick}
-          />
-          <label id="status-label" className="status-label">
-            {statusLabelText}
-          </label>
-        </div>
-        <div className="error-optional">
-          <button
-            id="retry-btn"
-            className="control-btn retry-btn"
-            title="Retry last transcription"
-            style={{ display: retryVisible ? "flex" : "none" }}
-            onClick={onRetry}
-          >
-            ⟳
-          </button>
-        </div>
-        <div className="model-toggle">
-          <button
-            id="model-toggle-btn"
-            className="control-btn mode-btn"
-            title="Toggle transcription model"
-            onClick={onModelToggle}
-          >
-            {model === "whisper-1" ? "Whis" : "4o-t"}
-          </button>
-          <button
-            id="raw-chat-toggle-btn"
-            className="control-btn mode-btn"
-            title={rawChatMode === "raw" ? "Raw mode (Click to switch to Chat)" : "Chat mode (Click to switch to Raw)"}
-            onClick={onRawChatToggle}
-          >
-            {rawChatMode === "raw" ? "Raw" : "Chat"}
-          </button>
-        </div>
-        <div className="mode-toggle">
-          <button
-            id="mode-toggle-btn"
-            className="control-btn mode-btn"
-            title={insertMode ? "Insert Mode (Click to switch to Replace)" : "Replace Mode (Click to switch to Insert)"}
-            onClick={onModeToggle}
-          >
-            {insertMode ? "Ins" : "Repl"}
-          </button>
-          <button
-            id="auto-copy-btn"
-            className="control-btn mode-btn"
-            title={rewriteEnabled ? "Rewrite enabled (Click to disable)" : "Rewrite disabled (Click to enable)"}
-            onClick={onRewriteToggle}
-            style={rewriteBtnStyle}
-          >
-            {rewriteEnabled ? "Re" : "No"}
-          </button>
-        </div>
-        <div className="sidebar-controls">
-          <button id="minimize-btn" className="control-btn" title="Minimize" onClick={onMinimize}>
-            −
-          </button>
-          <button id="close-btn" className="control-btn" title="Close" onClick={onClose}>
-            ✕
-          </button>
-        </div>
+    <div className="circular-app">
+      {/* Main canvas - full window */}
+      <StatusCanvas
+        status={status}
+        waveformBins={waveformBins}
+        waveformAvgRms={waveformAvgRms}
+        dpr={dpr}
+        onClick={handleCanvasClick}
+      />
+
+      {/* Minimize at heading 30 (top right) */}
+      <button
+        className="radial-button"
+        style={radialPosition(25, 42)}
+        onClick={onMinimize}
+        title="Minimize"
+      >
+        −
+      </button>
+
+      {/* Close at heading 60 (top right) */}
+      <button
+        className="radial-button"
+        style={radialPosition(65, 42)}
+        onClick={onClose}
+        title="Close"
+      >
+        ✕
+      </button>
+
+      {/* Drag handle at heading 135 (bottom right) */}
+      <div
+        className="radial-button drag-handle-btn"
+        style={radialPosition(315, 42)}
+        data-tauri-drag-region
+        title="Drag to move"
+      >
+        ⋮⋮
       </div>
 
-      {/* Right Content Area */}
-      <div className="content-area">
-        <textarea
-          id="transcription-text"
-          className="transcription-textbox"
-          placeholder="Transcribed text will appear here..."
-          spellCheck={false}
-          ref={textareaRef}
-          value={transcriptionText}
-          onChange={onTextareaChange}
-          onMouseDown={(e) => e.stopPropagation()}
-        ></textarea>
-      </div>
-    </>
+      {/* Rewrite toggle at heading 240 (left) */}
+      <button
+        className="radial-button"
+        style={radialPosition(135, 42)}
+        onClick={onRewriteToggle}
+        title="Toggle Rewrite"
+      >
+        {rewriteEnabled ? "✍️" : "🥩"}
+      </button>
+
+      {/* Raw/Chat toggle at heading 270 (left) */}
+      <button
+        className="radial-button"
+        style={radialPosition(205, 42)}
+        onClick={onRawChatToggle}
+        title="Toggle Raw/Chat"
+      >
+        {rawChatMode === "raw" ? "⦿" : "🚫"}
+      </button>
+
+      {/* Model toggle at heading 300 (bottom left) */}
+      <button
+        className="radial-button"
+        style={radialPosition(245, 42)}
+        onClick={onModelToggle}
+        title="Toggle Model"
+      >
+        {model === "whisper-1" ? "Wh" : "4o"}
+      </button>
+
+      {/* Retry button (center overlay) */}
+      {retryVisible && (
+        <button className="retry-overlay-btn" onClick={onRetry}>
+          ⟳
+        </button>
+      )}
+
+      {/* Hidden textarea for backend compatibility */}
+      <textarea
+        ref={textareaRef}
+        value={transcriptionText}
+        onChange={(e) => setTranscriptionText(e.target.value)}
+        style={{ display: "none" }}
+      />
+    </div>
   );
 }

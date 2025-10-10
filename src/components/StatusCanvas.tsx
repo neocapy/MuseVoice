@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from "react";
 
-const SIDEBAR_WIDTH = 48;
+const CANVAS_SIZE = 100;
 
 interface StatusCanvasProps {
   status: "loading" | "ready" | "recording" | "processing";
@@ -24,7 +24,7 @@ export const StatusCanvas: React.FC<StatusCanvasProps> = ({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const size = SIDEBAR_WIDTH;
+    const size = CANVAS_SIZE;
     const width = size * dpr;
     const height = size * dpr;
 
@@ -47,12 +47,19 @@ export const StatusCanvas: React.FC<StatusCanvasProps> = ({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const size = SIDEBAR_WIDTH;
+    const size = CANVAS_SIZE;
     const center = size / 2;
-    const radius = 16;
+    const radius = 40;
 
-    // Clear
+    // Clear and fill entire canvas with gradient background
     ctx.clearRect(0, 0, size, size);
+
+    // Draw gradient background that fills the entire square
+    const gradient = ctx.createLinearGradient(0, 0, size, size);
+    gradient.addColorStop(0, '#667eea');
+    gradient.addColorStop(1, '#764ba2');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
 
     // Colors
     let fillColor = "#9ca3af";
@@ -67,7 +74,7 @@ export const StatusCanvas: React.FC<StatusCanvasProps> = ({
         strokeColor = "#dc2626";
         break;
       case "processing":
-        fillColor = "#f59e0b";
+        fillColor = "#f5be0b";
         strokeColor = "#d97706";
         break;
       case "loading":
@@ -82,32 +89,30 @@ export const StatusCanvas: React.FC<StatusCanvasProps> = ({
     ctx.arc(center, center, radius, 0, Math.PI * 2);
     ctx.fillStyle = fillColor;
     ctx.fill();
-    ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    // No stroke/ring on the main circle
 
     if (status === "ready") {
       // mic icon
       ctx.fillStyle = "white";
       ctx.strokeStyle = "white";
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 3;
 
       // @ts-ignore roundRect may be supported at runtime
       ctx.beginPath();
       // @ts-ignore
-      ctx.roundRect(center - 3, center - 8, 6, 12, 2);
+      ctx.roundRect(center - 6, center - 16, 12, 24, 3);
       ctx.fill();
 
       // stand
       ctx.beginPath();
-      ctx.moveTo(center, center + 4);
-      ctx.lineTo(center, center + 8);
+      ctx.moveTo(center, center + 8);
+      ctx.lineTo(center, center + 16);
       ctx.stroke();
 
       // base
       ctx.beginPath();
-      ctx.moveTo(center - 4, center + 8);
-      ctx.lineTo(center + 4, center + 8);
+      ctx.moveTo(center - 8, center + 16);
+      ctx.lineTo(center + 8, center + 16);
       ctx.stroke();
     } else if (status === "recording") {
       // waveform
@@ -120,10 +125,10 @@ export const StatusCanvas: React.FC<StatusCanvasProps> = ({
       };
       const avg = rmsToDbScale(waveformAvgRms || 0);
 
-      const bgBase = { r: 243, g: 233, b: 233 };
-      const bgHot = { r: 254, g: 182, b: 182 };
-      const ringBase = { r: 254, g: 202, b: 202 };
-      const ringHot = { r: 185, g: 28, b: 28 };
+      const bgBase = { r: 192, g: 0, b: 0 };
+      const bgHot = { r: 255, g: 160, b: 0 };
+      const ringBase = { r: 220, g: 38, b: 38 };
+      const ringHot = { r: 254, g: 80, b: 80 };
       const mix = (a: number, b: number, t: number) => Math.round(a + (b - a) * t);
       const bg = `rgb(${mix(bgBase.r, bgHot.r, avg)}, ${mix(bgBase.g, bgHot.g, avg)}, ${mix(bgBase.b, bgHot.b, avg)})`;
       const ring = `rgb(${mix(ringBase.r, ringHot.r, avg)}, ${mix(ringBase.g, ringHot.g, avg)}, ${mix(ringBase.b, ringHot.b, avg)})`;
@@ -134,20 +139,17 @@ export const StatusCanvas: React.FC<StatusCanvasProps> = ({
       ctx.arc(center, center, radius, 0, Math.PI * 2);
       ctx.fillStyle = bg;
       ctx.fill();
-      ctx.strokeStyle = ring;
-      ctx.lineWidth = 2;
-      ctx.stroke();
 
       // clip circle
       ctx.clip();
 
-      const padding = 2;
+      const padding = 4;
       const innerR = radius - padding;
       const N = bins.length;
       const leftX = center - innerR;
       const width = innerR * 2;
       const step = width / Math.max(1, N - 1);
-      const minHalfPx = 1;
+      const minHalfPx = 2;
 
       ctx.beginPath();
       for (let i = 0; i < N; i++) {
@@ -166,8 +168,7 @@ export const StatusCanvas: React.FC<StatusCanvasProps> = ({
         ctx.lineTo(x, yBot);
       }
       ctx.closePath();
-      ctx.fillStyle = "rgb(255, 0, 0)";
-      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = "rgba(255, 255, 255, 1.0)";
       ctx.fill();
       ctx.globalAlpha = 1.0;
 
@@ -175,11 +176,11 @@ export const StatusCanvas: React.FC<StatusCanvasProps> = ({
     } else if (status === "processing") {
       ctx.fillStyle = "white";
       ctx.strokeStyle = "white";
-      ctx.lineWidth = 2;
-      const dotSize = 2;
+      ctx.lineWidth = 3;
+      const dotSize = 3;
       for (let i = 0; i < 3; i++) {
         ctx.beginPath();
-        ctx.arc(center - 6 + i * 6, center, dotSize, 0, Math.PI * 2);
+        ctx.arc(center - 12 + i * 12, center, dotSize, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -188,8 +189,8 @@ export const StatusCanvas: React.FC<StatusCanvasProps> = ({
   return (
     <canvas
       id="status-canvas"
-      width={48}
-      height={48}
+      width={128}
+      height={128}
       ref={canvasRef}
       onClick={onClick}
     />
