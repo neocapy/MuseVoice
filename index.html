@@ -5,45 +5,11 @@
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MuseVoice</title>
-    <script type="module" src="/src/main.ts" defer></script>
+    <script type="module" src="/src/main.tsx" defer></script>
   </head>
 
   <body>
-    <div class="app-container">
-      <!-- Left Sidebar -->
-      <div class="sidebar">
-        <div class="drag-handle" data-tauri-drag-region title="Drag to move window"></div>
-        <div class="sidebar-content">
-          <canvas id="status-canvas" width="48" height="48"></canvas>
-          <label id="status-label" class="status-label">Loading</label>
-        </div>
-        <div class="error-optional">
-          <button id="retry-btn" class="control-btn retry-btn" title="Retry last transcription" style="display: none;">⟳</button>
-        </div>
-        <div class="model-toggle">
-          <button id="model-toggle-btn" class="control-btn mode-btn" title="Toggle transcription model">Whis</button>
-          <button id="raw-chat-toggle-btn" class="control-btn mode-btn" title="Toggle RAW/CHAT mode">Raw</button>
-        </div>
-        <div class="mode-toggle">
-          <button id="mode-toggle-btn" class="control-btn mode-btn" title="Toggle Insert/Replace Mode">Repl</button>
-          <button id="auto-copy-btn" class="control-btn mode-btn" title="Auto-copy to clipboard when text changes">Clip</button>
-        </div>
-        <div class="sidebar-controls">
-          
-          <button id="minimize-btn" class="control-btn" title="Minimize">−</button>
-          <button id="close-btn" class="control-btn" title="Close">✕</button>
-        </div>
-      </div>
-      
-      <!-- Right Content Area -->
-      <div class="content-area">
-        <textarea 
-          id="transcription-text" 
-          class="transcription-textbox" 
-          placeholder="Transcribed text will appear here..."
-          spellcheck="false"
-        ></textarea>
-      </div>
+    <div id="root" class="app-container">
     </div>
   </body>
 </html>
