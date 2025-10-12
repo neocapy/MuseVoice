@@ -1,6 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 
-mod encode;
 mod flow;
 mod flow_manager;
 mod stream_processor;
@@ -8,12 +7,13 @@ pub mod ebml;
 pub mod opus;
 pub mod webm;
 
-use flow_manager::{FlowManager, FlowManagerState, StatusResponse};
+use flow_manager::{FlowManager, FlowManagerState, StatusResponse, Options, OptionsPatch};
 use crate::flow::FlowState;
 use std::sync::Arc;
-use tauri::{AppHandle, State, Manager, Emitter};
+use tauri::{AppHandle, State, Emitter};
 use tokio::sync::RwLock;
 use tauri_plugin_clipboard_manager::ClipboardExt;
+use serde::Serialize;
 
 #[cfg(desktop)]
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
@@ -114,12 +114,16 @@ async fn retry_transcription(
 #[tauri::command]
 async fn set_transcription_model(
     flow_manager: State<'_, FlowManagerState>,
+    app_handle: AppHandle,
     model: String,
 ) -> Result<String, String> {
     let mut manager_guard = flow_manager.write().await;
 
     if let Some(manager) = manager_guard.as_mut() {
-        manager.set_model(model)?;
+        // Apply as a patch to ensure a single emission path
+        let applied = manager.update_options(OptionsPatch { model: Some(model), rewrite_enabled: None })?;
+        let full = manager.options();
+        let _ = app_handle.emit("options-changed", OptionsChangedEvent { full, patch: applied });
         Ok("Model updated".to_string())
     } else {
         Err("Flow manager not initialized".to_string())
@@ -129,12 +133,15 @@ async fn set_transcription_model(
 #[tauri::command]
 async fn set_rewrite_enabled(
     flow_manager: State<'_, FlowManagerState>,
+    app_handle: AppHandle,
     enabled: bool,
 ) -> Result<String, String> {
     let mut manager_guard = flow_manager.write().await;
 
     if let Some(manager) = manager_guard.as_mut() {
-        manager.set_rewrite_enabled(enabled);
+        let applied = manager.update_options(OptionsPatch { model: None, rewrite_enabled: Some(enabled) })?;
+        let full = manager.options();
+        let _ = app_handle.emit("options-changed", OptionsChangedEvent { full, patch: applied });
         Ok("Rewrite setting updated".to_string())
     } else {
         Err("Flow manager not initialized".to_string())
@@ -159,6 +166,39 @@ async fn copy_to_clipboard(text: String, app_handle: AppHandle) -> Result<String
     match app_handle.clipboard().write_text(text) {
         Ok(_) => Ok("Text copied to clipboard successfully".to_string()),
         Err(e) => Err(format!("Failed to copy text to clipboard: {}", e)),
+    }
+}
+
+#[derive(Serialize, Clone)]
+struct OptionsChangedEvent {
+    full: Options,
+    patch: OptionsPatch,
+}
+
+#[tauri::command]
+async fn get_options(flow_manager: State<'_, FlowManagerState>) -> Result<Options, String> {
+    let manager_guard = flow_manager.read().await;
+    if let Some(manager) = manager_guard.as_ref() {
+        Ok(manager.options())
+    } else {
+        Ok(Options { model: "whisper-1".to_string(), rewrite_enabled: false })
+    }
+}
+
+#[tauri::command]
+async fn update_options(
+    flow_manager: State<'_, FlowManagerState>,
+    app_handle: AppHandle,
+    patch: OptionsPatch,
+) -> Result<Options, String> {
+    let mut manager_guard = flow_manager.write().await;
+    if let Some(manager) = manager_guard.as_mut() {
+        let applied = manager.update_options(patch)?;
+        let full = manager.options();
+        let _ = app_handle.emit("options-changed", OptionsChangedEvent { full: full.clone(), patch: applied });
+        Ok(full)
+    } else {
+        Err("Flow manager not initialized".to_string())
     }
 }
 
@@ -272,7 +312,9 @@ pub fn run() {
             has_retry_data,
             copy_to_clipboard,
             set_transcription_model,
-            set_rewrite_enabled
+            set_rewrite_enabled,
+            get_options,
+            update_options
         ])
         .setup(move |app| {
             // Setup global shortcut for desktop platforms

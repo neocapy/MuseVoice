@@ -214,6 +214,27 @@ impl FlowManager {
     pub fn set_rewrite_enabled(&mut self, enabled: bool) {
         self.rewrite_enabled = enabled;
     }
+
+    pub fn options(&self) -> Options {
+        Options {
+            model: self.model.clone(),
+            rewrite_enabled: self.rewrite_enabled,
+        }
+    }
+
+    pub fn update_options(&mut self, patch: OptionsPatch) -> Result<OptionsPatch, String> {
+        let mut applied = OptionsPatch::default();
+
+        if let Some(model) = patch.model {
+            self.set_model(model.clone())?;
+            applied.model = Some(model);
+        }
+        if let Some(enabled) = patch.rewrite_enabled {
+            self.set_rewrite_enabled(enabled);
+            applied.rewrite_enabled = Some(enabled);
+        }
+        Ok(applied)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -226,4 +247,16 @@ pub struct StatusResponse {
 pub struct WaveformChunkPayload {
     pub bins: Vec<f32>,
     pub avg_rms: f32,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Options {
+    pub model: String,
+    pub rewrite_enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct OptionsPatch {
+    pub model: Option<String>,
+    pub rewrite_enabled: Option<bool>,
 }

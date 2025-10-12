@@ -377,7 +377,7 @@ Ok(webm_data)
             ).map_err(|e| format!("Failed to create processor: {}", e))?;
 
             let mut last_stats_print = Instant::now();
-            let stats_interval = Duration::from_secs(1);
+            let stats_interval = Duration::from_secs(10);
             let mut total_received = 0usize;
             let mut total_sample_count = 0usize;
 
@@ -787,8 +787,6 @@ Ok(webm_data)
         let response_text = response.text().await.map_err(|e| AudioError {
             message: format!("Failed to get response text: {}", e),
         })?;
-
-        println!("Raw GPT-5 response: {}", response_text);
 
         // Try to parse it
         let gpt_response: GPTResponse = serde_json::from_str(&response_text).map_err(|e| AudioError {

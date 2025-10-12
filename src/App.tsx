@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 
 import doneSound from "./done.wav";
 import boowompSound from "./sounds/boowomp.mp3";
@@ -12,12 +13,7 @@ import { useBackendListeners } from "./hooks/useBackendListeners";
 
 type FrontendStatus = "loading" | "ready" | "recording" | "processing";
 type Model = "whisper-1" | "gpt-4o-transcribe";
-type RawChatMode = "raw" | "chat";
 
-function formatSampleCount(samples: number): string {
-  if (samples >= 1000) return Math.floor(samples / 1000) + "k";
-  return samples.toString();
-}
 
 function addSmartSpacing(text: string, insertPosition: number, fullText: string) {
   const noSpaceAfter = new Set(["(", "[", "{", '"', "'", "`", " ", "\n", "\t"]);
@@ -72,16 +68,13 @@ export default function App() {
   const [status, setStatus] = useState<FrontendStatus>("loading");
   const [rewriteEnabled, setRewriteEnabled] = useState<boolean>(false);
   const [model, setModel] = useState<Model>("gpt-4o-transcribe");
-  const [rawChatMode, setRawChatMode] = useState<RawChatMode>("raw");
   const [retryVisible, setRetryVisible] = useState<boolean>(false);
 
-  const [currentSamples, setCurrentSamples] = useState<number | null>(null);
   const [waveformBins, setWaveformBins] = useState<number[]>([]);
   const [waveformAvgRms, setWaveformAvgRms] = useState<number>(0);
 
   const [transcriptionText, setTranscriptionText] = useState<string>("");
   const [contextMenuVisible, setContextMenuVisible] = useState<boolean>(false);
-  const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const dpr = useDpr();
@@ -117,27 +110,43 @@ export default function App() {
     setStatus("ready");
   }, []);
 
-  // Rewrite enabled -> backend
+  // Load options from backend once and subscribe to changes
   useEffect(() => {
+    let unlisten: (() => void) | undefined;
     (async () => {
       try {
-        await invoke("set_rewrite_enabled", { enabled: rewriteEnabled });
+        const opts = await invoke<{ model: Model; rewrite_enabled: boolean }>("get_options");
+        if (opts) {
+          setModel(opts.model);
+          setRewriteEnabled(opts.rewrite_enabled);
+        }
       } catch (e) {
-        console.error("Failed to set rewrite enabled:", e);
+        console.error("Failed to load options:", e);
       }
-    })();
-  }, [rewriteEnabled]);
 
-  // Model -> backend
-  useEffect(() => {
-    (async () => {
       try {
-        await invoke("set_transcription_model", { model });
+        unlisten = await listen("options-changed", (event) => {
+          const payload = event.payload as any;
+          const full = payload?.full as { model: Model; rewrite_enabled: boolean } | undefined;
+          const patch = payload?.patch as Partial<{ model: Model; rewrite_enabled: boolean }> | undefined;
+
+          // Prefer patch for minimal updates, fall back to full if needed
+          if (patch) {
+            if (typeof patch.rewrite_enabled === "boolean") setRewriteEnabled(patch.rewrite_enabled);
+            if (patch.model) setModel(patch.model as Model);
+          } else if (full) {
+            setModel(full.model);
+            setRewriteEnabled(full.rewrite_enabled);
+          }
+        });
       } catch (e) {
-        console.error("Failed to set model:", e);
+        console.error("Failed to subscribe to options-changed:", e);
       }
     })();
-  }, [model]);
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   // Retry availability on load
   useEffect(() => {
@@ -164,11 +173,9 @@ export default function App() {
   // Backend event listeners - pass insertMode=false since we're always replacing
   useBackendListeners({
     insertMode: false,
-    rawChatMode,
     transcriptionText,
     isExpanded: false,
     setStatus,
-    setCurrentSamples,
     setWaveformBins,
     setWaveformAvgRms,
     setTranscriptionText,
@@ -226,27 +233,27 @@ export default function App() {
   }, [handleCanvasClick]);
 
   // Status label text
-  const statusLabelText = (() => {
-    switch (status) {
-      case "loading":
-        return "Loading";
-      case "ready":
-        return "Ready";
-      case "recording":
-        return currentSamples !== null ? formatSampleCount(currentSamples) : "Rec";
-      case "processing":
-        return "Proc";
-      default:
-        return "Ready";
-    }
-  })();
+  // const statusLabelText = (() => {
+  //   switch (status) {
+  //     case "loading":
+  //       return "Loading";
+  //     case "ready":
+  //       return "Ready";
+  //     case "recording":
+  //       return currentSamples !== null ? formatSampleCount(currentSamples) : "Rec";
+  //     case "processing":
+  //       return "Proc";
+  //     default:
+  //       return "Ready";
+  //   }
+  // })();
 
   // Context menu handlers
-  const onContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    setContextMenuPos({ x: e.clientX, y: e.clientY });
-    setContextMenuVisible(true);
-  }, []);
+  // const onContextMenu = useCallback((e: React.MouseEvent) => {
+  //   e.preventDefault();
+  //   setContextMenuPos({ x: e.clientX, y: e.clientY });
+  //   setContextMenuVisible(true);
+  // }, []);
 
   const closeContextMenu = useCallback(() => {
     setContextMenuVisible(false);
@@ -276,20 +283,25 @@ export default function App() {
     }
   }, []);
 
-  const onRewriteToggle = useCallback(() => {
-    setRewriteEnabled((prev) => !prev);
+  const onRewriteToggle = useCallback(async () => {
+    try {
+      await invoke("set_rewrite_enabled", { enabled: !rewriteEnabled });
+    } catch (e) {
+      console.error("Failed to toggle rewrite:", e);
+    }
     closeContextMenu();
-  }, [closeContextMenu]);
+  }, [rewriteEnabled, closeContextMenu]);
 
-  const onModelToggle = useCallback(() => {
-    setModel((prev) => (prev === "whisper-1" ? "gpt-4o-transcribe" : "whisper-1"));
+  const onModelToggle = useCallback(async () => {
+    const next = model === "whisper-1" ? "gpt-4o-transcribe" : "whisper-1";
+    try {
+      await invoke("set_transcription_model", { model: next });
+    } catch (e) {
+      console.error("Failed to toggle model:", e);
+    }
     closeContextMenu();
-  }, [closeContextMenu]);
+  }, [model, closeContextMenu]);
 
-  const onRawChatToggle = useCallback(() => {
-    setRawChatMode((prev) => (prev === "raw" ? "chat" : "raw"));
-    closeContextMenu();
-  }, [closeContextMenu]);
 
   const onRetry = useCallback(async () => {
     try {
@@ -361,15 +373,6 @@ export default function App() {
         {rewriteEnabled ? "✍️" : "🥩"}
       </button>
 
-      {/* Raw/Chat toggle at heading 270 (left) */}
-      <button
-        className="radial-button"
-        style={radialPosition(205, 42)}
-        onClick={onRawChatToggle}
-        title="Toggle Raw/Chat"
-      >
-        {rawChatMode === "raw" ? "⦿" : "🚫"}
-      </button>
 
       {/* Model toggle at heading 300 (bottom left) */}
       <button

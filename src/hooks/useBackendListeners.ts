@@ -3,17 +3,14 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 
 type FrontendStatus = "loading" | "ready" | "recording" | "processing";
-type RawChatMode = "raw" | "chat";
 type FlowState = "idle" | "recording" | "processing" | "completed" | "error" | "cancelled";
 type WaveformChunkPayload = { bins: number[]; avgRms?: number; avg_rms?: number };
 
 interface UseBackendListenersProps {
   insertMode: boolean;
-  rawChatMode: RawChatMode;
   transcriptionText: string;
   isExpanded: boolean;
   setStatus: (status: FrontendStatus) => void;
-  setCurrentSamples: (samples: number) => void;
   setWaveformBins: (bins: number[]) => void;
   setWaveformAvgRms: (rms: number) => void;
   setTranscriptionText: (text: string) => void;
@@ -34,11 +31,9 @@ const COLLAPSE_HEIGHT = 72;
 
 export function useBackendListeners({
   insertMode,
-  rawChatMode,
   transcriptionText,
   isExpanded,
   setStatus,
-  setCurrentSamples,
   setWaveformBins,
   setWaveformAvgRms,
   setTranscriptionText,
@@ -89,9 +84,8 @@ export function useBackendListeners({
 
         // Sample count updates
         unsubs.push(
-          await listen<number>("sample-count", (event) => {
+          await listen<number>("sample-count", (_event) => {
             if (!mounted) return;
-            setCurrentSamples(event.payload);
           })
         );
 
@@ -112,9 +106,6 @@ export function useBackendListeners({
             if (!mounted) return;
             const incoming = event.payload || "";
             let processedText = incoming;
-            if (rawChatMode === "chat") {
-              processedText = removeTrailingPunctuation(incoming);
-            }
 
             if (insertMode && textareaRef.current) {
               const currentText = transcriptionText;
@@ -244,11 +235,10 @@ export function useBackendListeners({
     };
   }, [
     insertMode,
-    rawChatMode,
+    // rawChatMode removed
     transcriptionText,
     isExpanded,
     setStatus,
-    setCurrentSamples,
     setWaveformBins,
     setWaveformAvgRms,
     setTranscriptionText,

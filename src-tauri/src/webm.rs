@@ -391,7 +391,7 @@ impl WebmWriter {
         track_entry.u1(ids::CODEC_ID).size(6).bytes(b"A_OPUS");
         
         // Codec delay derived from preskip (in nanoseconds)
-        track_entry.u2(ids::CODEC_DELAY).size(8).u8(((preskip as u64) * 1_000_000_000u64 / SAMPLE_RATE as u64));
+        track_entry.u2(ids::CODEC_DELAY).size(8).u8((preskip as u64) * 1_000_000_000u64 / SAMPLE_RATE as u64);
         
         // Seek pre-roll (80000000 ns = 80ms)
         track_entry.u2(ids::SEEK_PRE_ROLL).size(4).u4(80000000);

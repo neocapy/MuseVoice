@@ -242,13 +242,6 @@ impl AudioStreamProcessor {
         Ok(webm_data)
     }
 
-    /// Get current buffer statistics
-    ///
-    /// Returns (samples_in_buffer, webm_buffered_bytes)
-    pub fn buffer_stats(&self) -> (usize, usize) {
-        (self.input_buffer.len(), self.webm_writer.buffered_size())
-    }
-
     /// Get processing statistics
     pub fn stats(&self) -> ProcessorStats {
         ProcessorStats {
