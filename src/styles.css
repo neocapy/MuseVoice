@@ -21,6 +21,9 @@
   --accent: #6366f1;
   --accent-hover: #5048e5;
   --border: #d1d5db;
+  --glass-bg: rgba(255,255,255,0.18);
+  --glass-border: rgba(15,23,42,0.12);
+  --glass-hover: rgba(255,255,255,0.32);
 
   font-family: 'Outfit', system-ui, -apple-system, sans-serif;
   font-synthesis: none;
@@ -48,6 +51,89 @@ html, body {
   height: 100vh;
   position: relative;
   overflow: visible;
+}
+
+/* New UIRoot layout */
+.uiroot {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  backdrop-filter: saturate(120%) blur(8px);
+}
+
+.uiroot-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+}
+
+.ui-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none; /* allow dragging window anywhere */
+}
+
+.ui-controls .left-controls,
+.ui-controls .right-controls,
+.ui-controls .bottom-right {
+  position: absolute;
+  display: flex;
+  gap: 8px;
+  pointer-events: auto; /* enable interaction on controls */
+}
+
+.ui-controls .left-controls {
+  top: 4px;
+  left: 4px;
+}
+
+.ui-controls .right-controls {
+  top: 2px;
+  right: 2px;
+}
+
+.ui-controls .bottom-right {
+  right: 6px;
+  bottom: 6px;
+}
+
+.ctrl.btn, .ctrl.pill {
+  -webkit-app-region: no-drag;
+  border: none;
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 11px;
+  line-height: 1;
+  box-shadow: 0 6px 24px rgba(2, 6, 23, 0.10);
+  transition: background 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  backdrop-filter: blur(8px) saturate(120%);
+}
+
+.ctrl.btn:hover, .ctrl.pill:hover {
+  background: var(--glass-hover);
+  transform: translateY(-1px);
+}
+
+.ctrl.pill {
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+
+.ctrl.pill.ghost {
+  background: rgba(255,255,255,0.1);
+}
+
+/* Drag region helper for cross-platform */
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
 }
 
 /* Canvas - full window */

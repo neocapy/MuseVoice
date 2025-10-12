@@ -14,11 +14,11 @@
     "windows": [
       {
         "title": "MuseVoice",
-        "width": 100,
-        "height": 100,
+        "width": 208,
+        "height": 128,
         "decorations": false,
         "alwaysOnTop": true,
-        "resizable": false,
+        "resizable": true,
         "transparent": false,
         "center": true
       }
