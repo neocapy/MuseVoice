@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{oneshot, RwLock};
 use tokio_util::sync::CancellationToken;
 use crate::stream_processor::AudioStreamProcessor;
+use crate::audio_output::AudioOutputManager;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -46,7 +47,6 @@ pub enum FlowEvent {
     AudioFileSaved(String), // Path to the saved audio file (WebM format)
     AudioDataReady(Vec<u8>), // Audio buffer ready for transcription (WebM format, for retry functionality)
     WaveformChunk { bins: Vec<f32>, avg_rms: f32 },
-    AudioFeedback(String), // Sound file name to play for user feedback
     Error(String),
 }
 
@@ -102,21 +102,21 @@ pub struct Flow {
     callback: FlowCallback,
     cancellation_token: CancellationToken,
     model: String,
-    origin: String,
     rewrite_enabled: bool,
     omit_final_punctuation: bool,
+    audio_manager: Arc<Mutex<AudioOutputManager>>,
 }
 
 impl Flow {
-    pub fn new(callback: FlowCallback, model: String, origin: String, rewrite_enabled: bool, omit_final_punctuation: bool) -> Self {
+    pub fn new(callback: FlowCallback, model: String, rewrite_enabled: bool, omit_final_punctuation: bool, audio_manager: Arc<Mutex<AudioOutputManager>>) -> Self {
         Self {
             state: Arc::new(RwLock::new(FlowState::Idle)),
             callback,
             cancellation_token: CancellationToken::new(),
             model,
-            origin,
             rewrite_enabled,
             omit_final_punctuation,
+            audio_manager,
         }
     }
 
@@ -177,14 +177,14 @@ impl Flow {
         let audio_data = match mode {
             FlowMode::RecordAndTranscribe { stop_signal } => {
                 // Set initial state and emit audio feedback for starting recording
-                self.emit_audio_feedback_if_enabled("boowomp.mp3");
+                self.play_sound("boowomp.mp3");
                 self.set_state(FlowState::Recording).await;
 
                 // Start streaming audio recording (now includes encoding)
                 let audio_data = match self.record_audio(stop_signal).await {
                     Ok(data) => data,
                     Err(e) => {
-                        self.emit_audio_feedback_if_enabled("pipe.mp3");
+                        self.play_sound("pipe.mp3");
                         self.set_state(FlowState::Error).await;
                         self.emit_event(FlowEvent::Error(e.message.clone()));
                         return Err(e);
@@ -193,13 +193,13 @@ impl Flow {
 
                 // Check if cancelled
                 if self.cancellation_token.is_cancelled() {
-                    self.emit_audio_feedback_if_enabled("pipe.mp3");
+                    self.play_sound("pipe.mp3");
                     self.set_state(FlowState::Cancelled).await;
                     return Ok(());
                 }
 
                 // Recording and encoding complete - emit bamboo hit sound
-                self.emit_audio_feedback_if_enabled("bamboo_hit.mp3");
+                self.play_sound("bamboo_hit.mp3");
                 self.set_state(FlowState::Processing).await;
 
                 // Emit audio data for potential retry functionality
@@ -218,7 +218,7 @@ impl Flow {
 
                 // Check if cancelled
                 if self.cancellation_token.is_cancelled() {
-                    self.emit_audio_feedback_if_enabled("pipe.mp3");
+                    self.play_sound("pipe.mp3");
                     self.set_state(FlowState::Cancelled).await;
                     return Ok(());
                 }
@@ -231,7 +231,7 @@ impl Flow {
         let mut transcribed_text = match self.transcribe_audio(audio_data).await {
             Ok(text) => text,
             Err(e) => {
-                self.emit_audio_feedback_if_enabled("pipe.mp3");
+                self.play_sound("pipe.mp3");
                 self.set_state(FlowState::Error).await;
                 self.emit_event(FlowEvent::Error(e.message.clone()));
                 return Err(e);
@@ -260,6 +260,7 @@ impl Flow {
         }
 
         self.set_state(FlowState::Completed).await;
+        self.play_sound("done.wav");
         self.emit_event(FlowEvent::TranscriptionResult(transcribed_text));
         Ok(())
     }
@@ -900,13 +901,9 @@ Ok(webm_data)
         (self.callback)(event);
     }
 
-    fn should_emit_audio_feedback(&self) -> bool {
-        self.origin == "shortcut"
-    }
-
-    fn emit_audio_feedback_if_enabled(&self, sound_file: &str) {
-        if self.should_emit_audio_feedback() {
-            self.emit_event(FlowEvent::AudioFeedback(sound_file.to_string()));
+    fn play_sound(&self, sound_file: &str) {
+        if let Ok(mut manager) = self.audio_manager.lock() {
+            manager.play_sound(sound_file);
         }
     }
 

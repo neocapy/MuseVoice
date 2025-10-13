@@ -16,10 +16,6 @@ interface UseBackendListenersProps {
   setTranscriptionText: (text: string) => void;
   setLayoutMode: (mode: "expanded" | "collapsed" | "h-collapsed") => void;
   setRetryVisible: (visible: boolean) => void;
-  doneAudio: HTMLAudioElement;
-  boowompAudio: HTMLAudioElement;
-  bambooHitAudio: HTMLAudioElement;
-  pipeAudio: HTMLAudioElement;
   copyToClipboard: (text: string) => Promise<void>;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   addSmartSpacing: (text: string, insertPosition: number, fullText: string) => { text: string; adjustedPosition: number };
@@ -39,10 +35,6 @@ export function useBackendListeners({
   setTranscriptionText,
   setLayoutMode,
   setRetryVisible,
-  doneAudio,
-  boowompAudio,
-  bambooHitAudio,
-  pipeAudio,
   copyToClipboard,
   textareaRef,
   addSmartSpacing,
@@ -51,10 +43,6 @@ export function useBackendListeners({
   useEffect(() => {
     let unsubs: UnlistenFn[] = [];
     let mounted = true;
-
-    const lastAudioPlayTimeRef = new Map<string, number>();
-    const audioPlayCountRef = new Map<string, number>();
-    const AUDIO_DEBOUNCE_MS = 150;
 
     (async () => {
       try {
@@ -146,13 +134,6 @@ export function useBackendListeners({
             ) {
               setLayoutMode("expanded");
             }
-
-            // Play done sound
-            try {
-              await doneAudio.play();
-            } catch (e) {
-              console.error("Failed to play done sound:", e);
-            }
           })
         );
 
@@ -172,52 +153,6 @@ export function useBackendListeners({
           })
         );
 
-        // Audio feedback events
-        unsubs.push(
-          await listen<string>("audio-feedback", async (event) => {
-            if (!mounted) return;
-            const soundFile = event.payload;
-
-            const now = Date.now();
-            const lastPlayTime = lastAudioPlayTimeRef.get(soundFile) || 0;
-            if (now - lastPlayTime < AUDIO_DEBOUNCE_MS) {
-              return; // debounced
-            }
-            lastAudioPlayTimeRef.set(soundFile, now);
-            audioPlayCountRef.set(soundFile, (audioPlayCountRef.get(soundFile) || 0) + 1);
-
-            let audio: HTMLAudioElement | null = null;
-            switch (soundFile) {
-              case "boowomp.mp3":
-                audio = boowompAudio;
-                break;
-              case "bamboo_hit.mp3":
-                audio = bambooHitAudio;
-                break;
-              case "pipe.mp3":
-                audio = pipeAudio;
-                break;
-              default:
-                audio = null;
-            }
-            if (!audio) return;
-
-            try {
-              if (!audio.paused) audio.pause();
-              audio.currentTime = 0;
-              const p = audio.play();
-              if (p) await p;
-            } catch (e) {
-              try {
-                audio.load();
-                await new Promise((r) => setTimeout(r, 100));
-                await audio.play();
-              } catch (err) {
-                console.error("Audio feedback failed:", err);
-              }
-            }
-          })
-        );
       } catch (e) {
         console.error("Failed to set up backend event listeners:", e);
       }
@@ -235,7 +170,6 @@ export function useBackendListeners({
     };
   }, [
     insertMode,
-    // rawChatMode removed
     transcriptionText,
     isExpanded,
     setStatus,
@@ -244,10 +178,6 @@ export function useBackendListeners({
     setTranscriptionText,
     setLayoutMode,
     setRetryVisible,
-    doneAudio,
-    boowompAudio,
-    bambooHitAudio,
-    pipeAudio,
     copyToClipboard,
     textareaRef,
     addSmartSpacing,

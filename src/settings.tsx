@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface Options {
   model: string;
@@ -60,17 +59,19 @@ export default function Settings() {
         },
       });
 
-      setTimeout(() => {
-        getCurrentWindow().close();
-      }, 200);
+      await invoke("close_settings_window");
     } catch (e) {
       console.error("Failed to save options:", e);
       setSaving(false);
     }
   };
 
-  const handleCancel = () => {
-    getCurrentWindow().close();
+  const handleCancel = async () => {
+    try {
+      await invoke("close_settings_window");
+    } catch (e) {
+      console.error("Failed to close settings window:", e);
+    }
   };
 
   if (loading) {
@@ -83,8 +84,6 @@ export default function Settings() {
 
   return (
     <div className="settings-container">
-      <h1 className="settings-title">Settings</h1>
-
       <div className="settings-section">
         <label className="settings-label">
           Transcription Model

@@ -3,13 +3,15 @@
 mod flow;
 mod flow_manager;
 mod stream_processor;
+mod audio_output;
 pub mod ebml;
 pub mod opus;
 pub mod webm;
 
 use flow_manager::{FlowManager, FlowManagerState, StatusResponse, Options, OptionsPatch};
 use crate::flow::FlowState;
-use std::sync::Arc;
+use crate::audio_output::AudioOutputManager;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State, Emitter, Manager};
 use tauri::menu::{Menu, MenuItem, ContextMenu};
 use tokio::sync::RwLock;
@@ -42,8 +44,8 @@ async fn get_status(flow_manager: State<'_, FlowManagerState>) -> Result<StatusR
 #[tauri::command]
 async fn start_audio_stream(
     flow_manager: State<'_, FlowManagerState>,
+    audio_manager: State<'_, AudioOutputManagerState>,
     app_handle: AppHandle,
-    origin: String,
 ) -> Result<String, String> {
     let mut manager_guard = flow_manager.write().await;
 
@@ -53,7 +55,8 @@ async fn start_audio_stream(
         match current_state {
             FlowState::Idle | FlowState::Completed | FlowState::Error | FlowState::Cancelled => {
                 let flow_manager_clone = Arc::clone(&flow_manager.inner());
-                manager.start_flow(app_handle, flow_manager_clone, origin).await?;
+                let audio_manager_clone = Arc::clone(&audio_manager.inner());
+                manager.start_flow(app_handle, flow_manager_clone, audio_manager_clone).await?;
                 Ok("Audio recording started successfully".to_string())
             }
             _ => Err("Cannot start recording: flow is not idle".to_string()),
@@ -64,7 +67,7 @@ async fn start_audio_stream(
 }
 
 #[tauri::command]
-async fn stop_audio_stream(flow_manager: State<'_, FlowManagerState>, origin: String) -> Result<String, String> {
+async fn stop_audio_stream(flow_manager: State<'_, FlowManagerState>) -> Result<String, String> {
     let mut manager_guard = flow_manager.write().await;
 
     if let Some(manager) = manager_guard.as_mut() {
@@ -72,7 +75,7 @@ async fn stop_audio_stream(flow_manager: State<'_, FlowManagerState>, origin: St
 
         match current_state {
             FlowState::Recording => {
-                manager.stop_flow(origin).await?;
+                manager.stop_flow().await?;
                 Ok("Recording stopped, starting transcription...".to_string())
             }
             _ => Err("Cannot stop recording: not currently recording".to_string()),
@@ -83,11 +86,11 @@ async fn stop_audio_stream(flow_manager: State<'_, FlowManagerState>, origin: St
 }
 
 #[tauri::command]
-async fn cancel_transcription(flow_manager: State<'_, FlowManagerState>, origin: String) -> Result<String, String> {
+async fn cancel_transcription(flow_manager: State<'_, FlowManagerState>) -> Result<String, String> {
     let mut manager_guard = flow_manager.write().await;
 
     if let Some(manager) = manager_guard.as_mut() {
-        manager.cancel_flow(origin).await;
+        manager.cancel_flow().await;
         Ok("Flow cancelled".to_string())
     } else {
         Err("Flow manager not initialized".to_string())
@@ -99,14 +102,15 @@ async fn cancel_transcription(flow_manager: State<'_, FlowManagerState>, origin:
 #[tauri::command]
 async fn retry_transcription(
     flow_manager: State<'_, FlowManagerState>,
+    audio_manager: State<'_, AudioOutputManagerState>,
     app_handle: AppHandle,
-    origin: String,
 ) -> Result<String, String> {
     let mut manager_guard = flow_manager.write().await;
 
     if let Some(manager) = manager_guard.as_mut() {
         let flow_manager_clone = Arc::clone(&flow_manager.inner());
-        manager.retry_transcription(app_handle, flow_manager_clone, origin).await?;
+        let audio_manager_clone = Arc::clone(&audio_manager.inner());
+        manager.retry_transcription(app_handle, flow_manager_clone, audio_manager_clone).await?;
         Ok("Retrying transcription...".to_string())
     } else {
         Err("Flow manager not initialized".to_string())
@@ -229,17 +233,119 @@ async fn open_settings_window(app: AppHandle) -> Result<(), String> {
         return Err("Settings window already open".to_string());
     }
 
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    use tauri::{WebviewUrl, WebviewWindowBuilder, PhysicalPosition};
     
-    let _window = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
+    let settings_width = 350.0;
+    let settings_height = 400.0;
+    let padding = 20.0;
+
+    let mut position: Option<PhysicalPosition<f64>> = None;
+
+    if let Some(main_window) = app.get_webview_window("main") {
+        if let (Ok(main_pos), Ok(main_size)) = (main_window.outer_position(), main_window.outer_size()) {
+            let main_x = main_pos.x as f64;
+            let main_y = main_pos.y as f64;
+            let main_width = main_size.width as f64;
+            let main_height = main_size.height as f64;
+
+            println!("Main window - x: {}, y: {}, width: {}, height: {}", main_x, main_y, main_width, main_height);
+
+            if let Ok(Some(monitor)) = main_window.current_monitor() {
+                let monitor_pos = monitor.position();
+                let monitor_size = monitor.size();
+                let monitor_x = monitor_pos.x as f64;
+                let monitor_y = monitor_pos.y as f64;
+                let monitor_width = monitor_size.width as f64;
+                let monitor_height = monitor_size.height as f64;
+
+                println!("Monitor - x: {}, y: {}, width: {}, height: {}", monitor_x, monitor_y, monitor_width, monitor_height);
+
+                let main_center_x = main_x + main_width / 2.0;
+                let settings_center_offset = settings_width / 2.0;
+
+                println!("Main center x: {}, settings center offset: {}", main_center_x, settings_center_offset);
+
+                // Try below
+                let try_below_y = main_y + main_height + padding;
+                println!("Trying below - y: {}, fits: {}", try_below_y, try_below_y + settings_height <= monitor_y + monitor_height);
+                if try_below_y + settings_height <= monitor_y + monitor_height {
+                    let x = (main_center_x - settings_center_offset).max(monitor_x).min(monitor_x + monitor_width - settings_width);
+                    println!("Below position - x: {}, y: {}", x, try_below_y);
+                    position = Some(PhysicalPosition::new(x, try_below_y));
+                }
+
+                // Try above
+                if position.is_none() {
+                    let try_above_y = main_y - settings_height - padding;
+                    println!("Trying above - y: {}, fits: {}", try_above_y, try_above_y >= monitor_y);
+                    if try_above_y >= monitor_y {
+                        let x = (main_center_x - settings_center_offset).max(monitor_x).min(monitor_x + monitor_width - settings_width);
+                        println!("Above position - x: {}, y: {}", x, try_above_y);
+                        position = Some(PhysicalPosition::new(x, try_above_y));
+                    }
+                }
+
+                // Try left
+                if position.is_none() {
+                    let main_center_y = main_y + main_height / 2.0;
+                    let settings_center_y_offset = settings_height / 2.0;
+                    
+                    let try_left_x = main_x - settings_width - padding;
+                    println!("Trying left - x: {}, fits: {}", try_left_x, try_left_x >= monitor_x);
+                    if try_left_x >= monitor_x {
+                        let y = (main_center_y - settings_center_y_offset).max(monitor_y).min(monitor_y + monitor_height - settings_height);
+                        println!("Left position - x: {}, y: {}", try_left_x, y);
+                        position = Some(PhysicalPosition::new(try_left_x, y));
+                    }
+                }
+
+                // Try right
+                if position.is_none() {
+                    let main_center_y = main_y + main_height / 2.0;
+                    let settings_center_y_offset = settings_height / 2.0;
+                    
+                    let try_right_x = main_x + main_width + padding;
+                    println!("Trying right - x: {}, fits: {}", try_right_x, try_right_x + settings_width <= monitor_x + monitor_width);
+                    if try_right_x + settings_width <= monitor_x + monitor_width {
+                        let y = (main_center_y - settings_center_y_offset).max(monitor_y).min(monitor_y + monitor_height - settings_height);
+                        println!("Right position - x: {}, y: {}", try_right_x, y);
+                        position = Some(PhysicalPosition::new(try_right_x, y));
+                    }
+                }
+
+                if position.is_none() {
+                    println!("No suitable position found, will center");
+                } else {
+                    println!("Final position selected: {:?}", position);
+                }
+            }
+        }
+    }
+
+    let mut builder = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
         .title("Settings")
-        .inner_size(400.0, 500.0)
-        .resizable(false)
-        .center()
-        .visible(true)
-        .build()
+        .inner_size(settings_width, settings_height)
+        .resizable(true)
+        .visible(true);
+
+    if let Some(pos) = position {
+        builder = builder.position(pos.x as f64, pos.y as f64);
+    } else {
+        builder = builder.center();
+    }
+
+    let _window = builder.build()
         .map_err(|e| format!("Failed to create settings window: {}", e))?;
 
+    Ok(())
+}
+
+#[tauri::command]
+async fn close_settings_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        window.close()
+            .map_err(|e| format!("Failed to close settings window: {}", e))?;
+    }
     Ok(())
 }
 
@@ -331,19 +437,18 @@ fn parse_shortcut(shortcut_str: &str) -> Result<Shortcut, String> {
     }
 }
 
-#[cfg(desktop)]
-fn emit_audio_feedback(app_handle: &AppHandle, sound_file: &str) {
-    let _ = app_handle.emit("audio-feedback", sound_file);
-}
+pub type AudioOutputManagerState = Arc<Mutex<AudioOutputManager>>;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let flow_manager: FlowManagerState = Arc::new(RwLock::new(None));
+    let audio_manager = AudioOutputManager::new();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .manage(flow_manager.clone())
+        .manage(audio_manager.clone())
         .invoke_handler(tauri::generate_handler![
             get_status,
             start_audio_stream,
@@ -357,7 +462,8 @@ pub fn run() {
             get_options,
             update_options,
             show_context_menu,
-            open_settings_window
+            open_settings_window,
+            close_settings_window
         ])
         .setup(move |app| {
             // Setup global shortcut for desktop platforms
@@ -369,6 +475,7 @@ pub fn run() {
                 match parse_shortcut(&shortcut_string) {
                     Ok(shortcut) => {
                         let flow_manager_for_handler = flow_manager.clone();
+                        let audio_manager_for_handler = audio_manager.clone();
                         let app_handle_for_handler = app.handle().clone();
 
                         let handler_result = app.handle().plugin(
@@ -376,6 +483,7 @@ pub fn run() {
                                 .with_handler(move |_app, _triggered_shortcut, event| {
                                     if event.state() == ShortcutState::Pressed {
                                         let flow_manager_clone = flow_manager_for_handler.clone();
+                                        let audio_manager_clone = audio_manager_for_handler.clone();
                                         let app_handle_clone = app_handle_for_handler.clone();
 
                                         // Spawn async task to handle the shortcut
@@ -389,40 +497,32 @@ pub fn run() {
 
                                                 match current_state {
                                                     FlowState::Idle | FlowState::Completed | FlowState::Error | FlowState::Cancelled => {
-                                                        // Start recording - play boowomp.mp3
-                                                        emit_audio_feedback(&app_handle_clone, "boowomp.mp3");
                                                         let mut manager_guard = flow_manager_clone.write().await;
                                                         if let Some(manager) = manager_guard.as_mut() {
                                                             let flow_manager_clone_for_start = Arc::clone(&flow_manager_clone);
-                                                            match manager.start_flow(app_handle_clone.clone(), flow_manager_clone_for_start, "shortcut".to_string()).await {
+                                                            match manager.start_flow(app_handle_clone.clone(), flow_manager_clone_for_start, audio_manager_clone).await {
                                                                 Ok(_) => println!("✅ Recording started via global shortcut"),
                                                                 Err(e) => {
                                                                     eprintln!("❌ Failed to start recording: {}", e);
-                                                                    emit_audio_feedback(&app_handle_clone, "pipe.mp3");
                                                                 }
                                                             }
                                                         }
                                                     }
                                                     FlowState::Recording => {
-                                                        // Stop recording - play bamboo_hit.mp3
-                                                        emit_audio_feedback(&app_handle_clone, "bamboo_hit.mp3");
                                                         let mut manager_guard = flow_manager_clone.write().await;
                                                         if let Some(manager) = manager_guard.as_mut() {
-                                                            match manager.stop_flow("shortcut".to_string()).await {
+                                                            match manager.stop_flow().await {
                                                                 Ok(_) => println!("🛑 Recording stopped via global shortcut"),
                                                                 Err(e) => {
                                                                     eprintln!("❌ Failed to stop recording: {}", e);
-                                                                    emit_audio_feedback(&app_handle_clone, "pipe.mp3");
                                                                 }
                                                             }
                                                         }
                                                     }
                                                     FlowState::Processing => {
-                                                        // Cancel transcription - play pipe.mp3
-                                                        emit_audio_feedback(&app_handle_clone, "pipe.mp3");
                                                         let mut manager_guard = flow_manager_clone.write().await;
                                                         if let Some(manager) = manager_guard.as_mut() {
-                                                            manager.cancel_flow("shortcut".to_string()).await;
+                                                            manager.cancel_flow().await;
                                                             println!("❌ Flow cancelled via global shortcut");
                                                         }
                                                     }
@@ -449,12 +549,15 @@ pub fn run() {
                 }
             }
 
-            // Initialize the flow manager in an async context
+            let audio_manager_clone = audio_manager.clone();
             let flow_manager_clone = flow_manager.clone();
             tauri::async_runtime::spawn(async move {
                 let mut manager_guard = flow_manager_clone.write().await;
                 *manager_guard = Some(FlowManager::new());
                 println!("Flow manager initialized");
+                
+                AudioOutputManager::start_cleanup_task(audio_manager_clone);
+                println!("Audio output cleanup task started");
             });
 
             let app_handle = app.handle().clone();

@@ -1,6 +1,7 @@
 use crate::flow::{Flow, FlowCallback, FlowEvent, FlowMode, FlowState};
+use crate::audio_output::AudioOutputManager;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{oneshot, RwLock};
 
@@ -55,9 +56,6 @@ impl FlowManager {
                     let _ = app_handle_clone.emit("transcription-result", &text);
                     let _ = app_handle_clone.emit("retry-available", false);
                 }
-                (_, FlowEvent::AudioFeedback(sound_file)) => {
-                    let _ = app_handle_clone.emit("audio-feedback", &sound_file);
-                }
                 (_, FlowEvent::Error(error)) => {
                     // Emit retry availability when there's an error and we have audio data
                     let app_handle_clone2 = app_handle_clone.clone();
@@ -102,9 +100,9 @@ impl FlowManager {
         })
     }
 
-    pub async fn start_flow(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState, origin: String) -> Result<(), String> {
+    pub async fn start_flow(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState, audio_manager: Arc<Mutex<AudioOutputManager>>) -> Result<(), String> {
         // Cancel any existing flow
-        self.cancel_flow(origin.clone()).await;
+        self.cancel_flow().await;
 
         // Create stop channel
         let (stop_sender, stop_receiver) = oneshot::channel();
@@ -113,7 +111,7 @@ impl FlowManager {
         let callback = Self::create_flow_callback(app_handle, flow_manager_state, CallbackMode::Full);
 
         // Create and start flow
-        let flow = Arc::new(Flow::new(callback, self.model.clone(), origin.clone(), self.rewrite_enabled, self.omit_final_punctuation));
+        let flow = Arc::new(Flow::new(callback, self.model.clone(), self.rewrite_enabled, self.omit_final_punctuation, audio_manager));
 
         // Store references
         self.current_flow = Some(Arc::clone(&flow));
@@ -129,7 +127,7 @@ impl FlowManager {
         Ok(())
     }
 
-    pub async fn stop_flow(&mut self, _origin: String) -> Result<(), String> {
+    pub async fn stop_flow(&mut self) -> Result<(), String> {
         println!("Flow manager: Stopping flow");
         if let Some(sender) = self.stop_sender.take() {
             println!("Flow manager: Sending stop signal");
@@ -145,7 +143,7 @@ impl FlowManager {
         }
     }
 
-    pub async fn cancel_flow(&mut self, _origin: String) {
+    pub async fn cancel_flow(&mut self) {
         if let Some(flow) = &self.current_flow {
             flow.cancel();
         }
@@ -173,20 +171,20 @@ impl FlowManager {
         self.retry_audio_data.is_some()
     }
 
-    pub async fn retry_transcription(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState, origin: String) -> Result<(), String> {
+    pub async fn retry_transcription(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState, audio_manager: Arc<Mutex<AudioOutputManager>>) -> Result<(), String> {
         // Get the stored audio data
         let audio_data = self.retry_audio_data.clone().ok_or_else(|| {
             "No recorded audio available for retry".to_string()
         })?;
 
         // Cancel any existing flow
-        self.cancel_flow(origin.clone()).await;
+        self.cancel_flow().await;
 
         // Create callback for flow events
         let callback = Self::create_flow_callback(app_handle, flow_manager_state, CallbackMode::RetryOnly);
 
         // Create flow and run transcription only
-        let flow = Arc::new(Flow::new(callback, self.model.clone(), origin.clone(), self.rewrite_enabled, self.omit_final_punctuation));
+        let flow = Arc::new(Flow::new(callback, self.model.clone(), self.rewrite_enabled, self.omit_final_punctuation, audio_manager));
         let flow_clone = Arc::clone(&flow);
 
         // Store reference

@@ -3,10 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useBackendListeners } from "./hooks/useBackendListeners";
-import doneSound from "./done.wav";
-import boowompSound from "./sounds/boowomp.mp3";
-import bambooHitSound from "./sounds/bamboo_hit.mp3";
-import pipeSound from "./sounds/pipe.mp3";
 
 type FrontendStatus = "loading" | "ready" | "recording" | "processing";
 
@@ -57,19 +53,7 @@ export default function UIRoot() {
   // Adjust theme for recording look: light slate blue bg, icy white waveform
   const theme = defaultTheme; // future: pull from persisted settings
 
-  // Hidden textarea + audio elements kept for compatibility
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const doneAudio = useMemo(() => new Audio(doneSound), []);
-  const boowompAudio = useMemo(() => new Audio(boowompSound), []);
-  const bambooHitAudio = useMemo(() => new Audio(bambooHitSound), []);
-  const pipeAudio = useMemo(() => new Audio(pipeSound), []);
-
-  useEffect(() => {
-    doneAudio.preload = "auto";
-    boowompAudio.preload = "auto";
-    bambooHitAudio.preload = "auto";
-    pipeAudio.preload = "auto";
-  }, [doneAudio, boowompAudio, bambooHitAudio, pipeAudio]);
 
   const copyToClipboard = useCallback(async (text: string) => {
     if (!text.trim()) return;
@@ -147,10 +131,6 @@ export default function UIRoot() {
     setTranscriptionText: () => {},
     setLayoutMode: () => {},
     setRetryVisible,
-    doneAudio,
-    boowompAudio,
-    bambooHitAudio,
-    pipeAudio,
     copyToClipboard,
     textareaRef,
     addSmartSpacing,
@@ -338,7 +318,7 @@ export default function UIRoot() {
 
   const onRetry = useCallback(async () => {
     try {
-      await invoke<string>("retry_transcription", { origin: "ui-button" });
+      await invoke<string>("retry_transcription");
     } catch (e) {
       console.error("Failed to retry transcription:", e);
     }
@@ -372,11 +352,11 @@ export default function UIRoot() {
       if (dist < 5 && dt < 300) {
         try {
           if (status === "ready") {
-            await invoke<string>("start_audio_stream", { origin: "canvas-click" });
+            await invoke<string>("start_audio_stream");
           } else if (status === "recording") {
-            await invoke<string>("stop_audio_stream", { origin: "canvas-click" });
+            await invoke<string>("stop_audio_stream");
           } else if (status === "processing") {
-            await invoke<string>("cancel_transcription", { origin: "canvas-click" });
+            await invoke<string>("cancel_transcription");
           }
         } catch (err) {
           console.error("Failed to toggle recording via canvas click:", err);
