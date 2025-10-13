@@ -127,6 +127,8 @@ async fn set_transcription_model(
             omit_final_punctuation: None,
             selected_prompt_id: None,
             custom_prompts: None,
+            api_key: None,
+            shortcuts: None,
         })?;
         let full = manager.options();
         let _ = app_handle.emit("options-changed", OptionsChangedEvent { full, patch: applied });
@@ -151,6 +153,8 @@ async fn set_rewrite_enabled(
             omit_final_punctuation: None,
             selected_prompt_id: None,
             custom_prompts: None,
+            api_key: None,
+            shortcuts: None,
         })?;
         let full = manager.options();
         let _ = app_handle.emit("options-changed", OptionsChangedEvent { full, patch: applied });
@@ -199,6 +203,9 @@ async fn get_options(flow_manager: State<'_, FlowManagerState>) -> Result<Option
             omit_final_punctuation: false,
             selected_prompt_id: "default".to_string(),
             custom_prompts: vec![],
+            api_key: String::new(),
+            api_key_from_env: std::env::var("OPENAI_API_KEY").is_ok(),
+            shortcuts: "Alt+Slash".to_string(),
         })
     }
 }
@@ -249,8 +256,8 @@ async fn open_settings_window(app: AppHandle) -> Result<(), String> {
 
     use tauri::{WebviewUrl, WebviewWindowBuilder, PhysicalPosition};
     
-    let settings_width = 350.0;
-    let settings_height = 400.0;
+    let settings_width = 460.0;
+    let settings_height = 750.0;
     let padding = 20.0;
 
     let mut position: Option<PhysicalPosition<f64>> = None;
@@ -361,6 +368,43 @@ async fn close_settings_window(app: AppHandle) -> Result<(), String> {
             .map_err(|e| format!("Failed to close settings window: {}", e))?;
     }
     Ok(())
+}
+
+#[tauri::command]
+async fn open_settings_folder() -> Result<String, String> {
+    use flow_manager::FlowManager;
+    
+    let config_dir = FlowManager::get_config_dir()
+        .ok_or_else(|| "Could not determine config directory".to_string())?;
+    
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&config_dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&config_dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&config_dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+    
+    Ok(config_dir.to_string_lossy().to_string())
 }
 
 #[cfg(desktop)]
@@ -477,7 +521,8 @@ pub fn run() {
             update_options,
             show_context_menu,
             open_settings_window,
-            close_settings_window
+            close_settings_window,
+            open_settings_folder
         ])
         .setup(move |app| {
             // Setup global shortcut for desktop platforms

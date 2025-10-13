@@ -106,10 +106,11 @@ pub struct Flow {
     omit_final_punctuation: bool,
     audio_manager: Arc<Mutex<AudioOutputManager>>,
     rewrite_prompt: String,
+    api_key: String,
 }
 
 impl Flow {
-    pub fn new(callback: FlowCallback, model: String, rewrite_enabled: bool, omit_final_punctuation: bool, audio_manager: Arc<Mutex<AudioOutputManager>>, rewrite_prompt: String) -> Self {
+    pub fn new(callback: FlowCallback, model: String, rewrite_enabled: bool, omit_final_punctuation: bool, audio_manager: Arc<Mutex<AudioOutputManager>>, rewrite_prompt: String, api_key: String) -> Self {
         Self {
             state: Arc::new(RwLock::new(FlowState::Idle)),
             callback,
@@ -119,6 +120,7 @@ impl Flow {
             omit_final_punctuation,
             audio_manager,
             rewrite_prompt,
+            api_key,
         }
     }
 
@@ -701,13 +703,17 @@ Ok(webm_data)
     /// Rewrite transcribed text using GPT-5 to handle dictation issues
     /// (phonetic alphabet, punctuation, formatting commands, etc.)
     async fn rewrite_transcribed_text(&self, transcribed_text: &str) -> Result<String, AudioError> {
-        let api_key = env::var("OPENAI_API_KEY").map_err(|_| AudioError {
-            message: "OPENAI_API_KEY environment variable not set".to_string(),
-        })?;
+        let api_key = if self.api_key.trim().is_empty() {
+            env::var("OPENAI_API_KEY").map_err(|_| AudioError {
+                message: "OPENAI_API_KEY environment variable not set".to_string(),
+            })?
+        } else {
+            self.api_key.clone()
+        };
 
         if api_key.trim().is_empty() {
             return Err(AudioError {
-                message: "OPENAI_API_KEY is empty".to_string(),
+                message: "OpenAI API key is empty".to_string(),
             });
         }
 
@@ -805,13 +811,17 @@ Ok(webm_data)
     }
 
     async fn transcribe_audio(&self, audio_data: Vec<u8>) -> Result<String, AudioError> {
-        let api_key = env::var("OPENAI_API_KEY").map_err(|_| AudioError {
-            message: "OPENAI_API_KEY environment variable not set".to_string(),
-        })?;
+        let api_key = if self.api_key.trim().is_empty() {
+            env::var("OPENAI_API_KEY").map_err(|_| AudioError {
+                message: "OPENAI_API_KEY environment variable not set".to_string(),
+            })?
+        } else {
+            self.api_key.clone()
+        };
 
         if api_key.trim().is_empty() {
             return Err(AudioError {
-                message: "OPENAI_API_KEY is empty".to_string(),
+                message: "OpenAI API key is empty".to_string(),
             });
         }
 

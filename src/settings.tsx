@@ -14,6 +14,9 @@ interface Options {
   omit_final_punctuation: boolean;
   selected_prompt_id: string;
   custom_prompts: RewritePrompt[];
+  api_key: string;
+  api_key_from_env: boolean;
+  shortcuts: string;
 }
 
 export default function Settings() {
@@ -23,6 +26,9 @@ export default function Settings() {
     omit_final_punctuation: false,
     selected_prompt_id: "default",
     custom_prompts: [],
+    api_key: "",
+    api_key_from_env: false,
+    shortcuts: "Alt+Slash",
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -81,6 +87,8 @@ export default function Settings() {
           omit_final_punctuation: options.omit_final_punctuation,
           selected_prompt_id: options.selected_prompt_id,
           custom_prompts: customPromptsOnly,
+          api_key: options.api_key,
+          shortcuts: options.shortcuts,
         },
       });
 
@@ -88,6 +96,14 @@ export default function Settings() {
     } catch (e) {
       console.error("Failed to save options:", e);
       setSaving(false);
+    }
+  };
+
+  const handleOpenSettingsFolder = async () => {
+    try {
+      await invoke("open_settings_folder");
+    } catch (e) {
+      console.error("Failed to open settings folder:", e);
     }
   };
 
@@ -147,6 +163,37 @@ export default function Settings() {
 
   return (
     <div className="settings-container">
+      <div className="settings-section">
+        <label className="settings-label">
+          OpenAI API Key
+          <input
+            type="password"
+            className="settings-input"
+            value={options.api_key}
+            onChange={(e) => setOptions({ ...options, api_key: e.target.value })}
+            disabled={options.api_key_from_env}
+            placeholder={options.api_key_from_env ? "Using environment variable" : "Enter your API key"}
+          />
+        </label>
+        {options.api_key_from_env && (
+          <p className="settings-hint">API key is set via OPENAI_API_KEY environment variable</p>
+        )}
+      </div>
+
+      <div className="settings-section">
+        <label className="settings-label">
+          Global Shortcuts
+          <input
+            type="text"
+            className="settings-input"
+            value={options.shortcuts}
+            onChange={(e) => setOptions({ ...options, shortcuts: e.target.value })}
+            placeholder="Alt+Slash, Ctrl+Space"
+          />
+        </label>
+        <p className="settings-hint">Comma-separated shortcuts (e.g., Alt+Slash, Ctrl+M)</p>
+      </div>
+
       <div className="settings-section">
         <label className="settings-label">
           Transcription Model
@@ -258,16 +305,21 @@ export default function Settings() {
       )}
 
       <div className="settings-actions">
-        <button className="settings-btn settings-btn-secondary" onClick={handleCancel}>
-          Cancel
+        <button className="settings-btn settings-btn-link" onClick={handleOpenSettingsFolder}>
+          Open Settings Folder
         </button>
-        <button
-          className="settings-btn settings-btn-primary"
-          onClick={handleSave}
-          disabled={saving}
-        >
-          {saving ? "Saving..." : "Save"}
-        </button>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button className="settings-btn settings-btn-secondary" onClick={handleCancel}>
+            Cancel
+          </button>
+          <button
+            className="settings-btn settings-btn-primary"
+            onClick={handleSave}
+            disabled={saving}
+          >
+            {saving ? "Saving..." : "Save"}
+          </button>
+        </div>
       </div>
     </div>
   );

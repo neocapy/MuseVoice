@@ -46,6 +46,8 @@ pub struct FlowManager {
     omit_final_punctuation: bool,
     selected_prompt_id: String,
     custom_prompts: Vec<RewritePrompt>,
+    api_key: String,
+    shortcuts: String,
     audio_manager: Arc<Mutex<AudioOutputManager>>,
 }
 
@@ -61,6 +63,8 @@ impl FlowManager {
             omit_final_punctuation: settings.omit_final_punctuation,
             selected_prompt_id: settings.selected_prompt_id,
             custom_prompts: settings.custom_prompts,
+            api_key: settings.api_key,
+            shortcuts: settings.shortcuts,
             audio_manager,
         }
     }
@@ -132,6 +136,10 @@ impl FlowManager {
     }
 
     pub async fn start_flow(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState) -> Result<(), String> {
+        if !self.has_valid_api_key() {
+            return Err("OpenAI API key is required. Please set it in Settings or via OPENAI_API_KEY environment variable.".to_string());
+        }
+
         self.cancel_flow().await;
 
         let (stop_sender, stop_receiver) = oneshot::channel();
@@ -139,6 +147,7 @@ impl FlowManager {
         let callback = Self::create_flow_callback(app_handle, flow_manager_state, CallbackMode::Full);
 
         let prompt_text = self.get_selected_prompt_text();
+        let api_key = self.get_effective_api_key();
         let flow = Arc::new(Flow::new(
             callback,
             self.model.clone(),
@@ -146,6 +155,7 @@ impl FlowManager {
             self.omit_final_punctuation,
             Arc::clone(&self.audio_manager),
             prompt_text,
+            api_key,
         ));
 
         self.current_flow = Some(Arc::clone(&flow));
@@ -214,6 +224,7 @@ impl FlowManager {
         let callback = Self::create_flow_callback(app_handle, flow_manager_state, CallbackMode::RetryOnly);
 
         let prompt_text = self.get_selected_prompt_text();
+        let api_key = self.get_effective_api_key();
         let flow = Arc::new(Flow::new(
             callback,
             self.model.clone(),
@@ -221,6 +232,7 @@ impl FlowManager {
             self.omit_final_punctuation,
             Arc::clone(&self.audio_manager),
             prompt_text,
+            api_key,
         ));
         let flow_clone = Arc::clone(&flow);
 
@@ -286,6 +298,8 @@ impl FlowManager {
             omit_final_punctuation: self.omit_final_punctuation,
             selected_prompt_id: self.selected_prompt_id.clone(),
             custom_prompts: self.custom_prompts.clone(),
+            api_key: self.api_key.clone(),
+            shortcuts: self.shortcuts.clone(),
         };
 
         let config_path = Self::get_config_path()
@@ -330,13 +344,34 @@ impl FlowManager {
         }];
         all_prompts.extend(self.custom_prompts.clone());
 
+        let api_key_from_env = std::env::var("OPENAI_API_KEY").is_ok();
+
         Options {
             model: self.model.clone(),
             rewrite_enabled: self.rewrite_enabled,
             omit_final_punctuation: self.omit_final_punctuation,
             selected_prompt_id: self.selected_prompt_id.clone(),
             custom_prompts: all_prompts,
+            api_key: self.api_key.clone(),
+            api_key_from_env,
+            shortcuts: self.shortcuts.clone(),
         }
+    }
+
+    fn has_valid_api_key(&self) -> bool {
+        if let Ok(env_key) = std::env::var("OPENAI_API_KEY") {
+            return !env_key.trim().is_empty();
+        }
+        !self.api_key.trim().is_empty()
+    }
+
+    pub fn get_effective_api_key(&self) -> String {
+        std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| self.api_key.clone())
+    }
+
+    pub fn get_config_dir() -> Option<PathBuf> {
+        ProjectDirs::from("com", "muse", "app")
+            .map(|proj_dirs| proj_dirs.config_dir().to_path_buf())
     }
 
     pub fn update_options(&mut self, patch: OptionsPatch) -> Result<OptionsPatch, String> {
@@ -370,6 +405,14 @@ impl FlowManager {
             self.custom_prompts = filtered_prompts.clone();
             applied.custom_prompts = Some(filtered_prompts);
         }
+        if let Some(api_key) = patch.api_key {
+            self.api_key = api_key.clone();
+            applied.api_key = Some(api_key);
+        }
+        if let Some(shortcuts) = patch.shortcuts {
+            self.shortcuts = shortcuts.clone();
+            applied.shortcuts = Some(shortcuts);
+        }
 
         self.save_settings()?;
         Ok(applied)
@@ -395,6 +438,9 @@ pub struct Options {
     pub omit_final_punctuation: bool,
     pub selected_prompt_id: String,
     pub custom_prompts: Vec<RewritePrompt>,
+    pub api_key: String,
+    pub api_key_from_env: bool,
+    pub shortcuts: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -404,6 +450,8 @@ pub struct OptionsPatch {
     pub omit_final_punctuation: Option<bool>,
     pub selected_prompt_id: Option<String>,
     pub custom_prompts: Option<Vec<RewritePrompt>>,
+    pub api_key: Option<String>,
+    pub shortcuts: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -413,6 +461,14 @@ struct PersistedSettings {
     pub omit_final_punctuation: bool,
     pub selected_prompt_id: String,
     pub custom_prompts: Vec<RewritePrompt>,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_shortcuts")]
+    pub shortcuts: String,
+}
+
+fn default_shortcuts() -> String {
+    "Alt+Slash".to_string()
 }
 
 impl Default for PersistedSettings {
@@ -423,6 +479,8 @@ impl Default for PersistedSettings {
             omit_final_punctuation: false,
             selected_prompt_id: "default".to_string(),
             custom_prompts: Vec::new(),
+            api_key: String::new(),
+            shortcuts: default_shortcuts(),
         }
     }
 }
