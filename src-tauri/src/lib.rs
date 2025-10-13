@@ -121,8 +121,7 @@ async fn set_transcription_model(
     let mut manager_guard = flow_manager.write().await;
 
     if let Some(manager) = manager_guard.as_mut() {
-        // Apply as a patch to ensure a single emission path
-        let applied = manager.update_options(OptionsPatch { model: Some(model), rewrite_enabled: None })?;
+        let applied = manager.update_options(OptionsPatch { model: Some(model), rewrite_enabled: None, omit_final_punctuation: None })?;
         let full = manager.options();
         let _ = app_handle.emit("options-changed", OptionsChangedEvent { full, patch: applied });
         Ok("Model updated".to_string())
@@ -140,7 +139,7 @@ async fn set_rewrite_enabled(
     let mut manager_guard = flow_manager.write().await;
 
     if let Some(manager) = manager_guard.as_mut() {
-        let applied = manager.update_options(OptionsPatch { model: None, rewrite_enabled: Some(enabled) })?;
+        let applied = manager.update_options(OptionsPatch { model: None, rewrite_enabled: Some(enabled), omit_final_punctuation: None })?;
         let full = manager.options();
         let _ = app_handle.emit("options-changed", OptionsChangedEvent { full, patch: applied });
         Ok("Rewrite setting updated".to_string())
@@ -182,7 +181,7 @@ async fn get_options(flow_manager: State<'_, FlowManagerState>) -> Result<Option
     if let Some(manager) = manager_guard.as_ref() {
         Ok(manager.options())
     } else {
-        Ok(Options { model: "whisper-1".to_string(), rewrite_enabled: false })
+        Ok(Options { model: "whisper-1".to_string(), rewrite_enabled: false, omit_final_punctuation: false })
     }
 }
 
@@ -220,6 +219,26 @@ async fn show_context_menu(app: AppHandle, window: tauri::Window) -> Result<(), 
 
     menu.popup(window)
         .map_err(|e| format!("Failed to show context menu: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_settings_window(app: AppHandle) -> Result<(), String> {
+    if let Some(_existing) = app.get_webview_window("settings") {
+        return Err("Settings window already open".to_string());
+    }
+
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    
+    let _window = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
+        .title("Settings")
+        .inner_size(400.0, 500.0)
+        .resizable(false)
+        .center()
+        .visible(true)
+        .build()
+        .map_err(|e| format!("Failed to create settings window: {}", e))?;
 
     Ok(())
 }
@@ -337,7 +356,8 @@ pub fn run() {
             set_rewrite_enabled,
             get_options,
             update_options,
-            show_context_menu
+            show_context_menu,
+            open_settings_window
         ])
         .setup(move |app| {
             // Setup global shortcut for desktop platforms
@@ -453,7 +473,14 @@ pub fn run() {
                         }
                     }
                     "settings" => {
-                        let _ = app_handle.emit("open-settings", serde_json::json!({ "source": "context-menu" }));
+                        let app_handle_clone = app_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = open_settings_window(app_handle_clone).await {
+                                if e != "Settings window already open" {
+                                    eprintln!("Failed to open settings window: {}", e);
+                                }
+                            }
+                        });
                     }
                     _ => {}
                 }

@@ -15,9 +15,10 @@ enum CallbackMode {
 pub struct FlowManager {
     current_flow: Option<Arc<Flow>>,
     stop_sender: Option<oneshot::Sender<()>>,
-    retry_audio_data: Option<Vec<u8>>, // Store audio data (WebM format) for retry functionality
+    retry_audio_data: Option<Vec<u8>>,
     model: String,
     rewrite_enabled: bool,
+    omit_final_punctuation: bool,
 }
 
 impl FlowManager {
@@ -28,6 +29,7 @@ impl FlowManager {
             retry_audio_data: None,
             model: "whisper-1".to_string(),
             rewrite_enabled: false,
+            omit_final_punctuation: false,
         }
     }
 
@@ -111,7 +113,7 @@ impl FlowManager {
         let callback = Self::create_flow_callback(app_handle, flow_manager_state, CallbackMode::Full);
 
         // Create and start flow
-        let flow = Arc::new(Flow::new(callback, self.model.clone(), origin.clone(), self.rewrite_enabled));
+        let flow = Arc::new(Flow::new(callback, self.model.clone(), origin.clone(), self.rewrite_enabled, self.omit_final_punctuation));
 
         // Store references
         self.current_flow = Some(Arc::clone(&flow));
@@ -184,7 +186,7 @@ impl FlowManager {
         let callback = Self::create_flow_callback(app_handle, flow_manager_state, CallbackMode::RetryOnly);
 
         // Create flow and run transcription only
-        let flow = Arc::new(Flow::new(callback, self.model.clone(), origin.clone(), self.rewrite_enabled));
+        let flow = Arc::new(Flow::new(callback, self.model.clone(), origin.clone(), self.rewrite_enabled, self.omit_final_punctuation));
         let flow_clone = Arc::clone(&flow);
 
         // Store reference
@@ -219,6 +221,7 @@ impl FlowManager {
         Options {
             model: self.model.clone(),
             rewrite_enabled: self.rewrite_enabled,
+            omit_final_punctuation: self.omit_final_punctuation,
         }
     }
 
@@ -232,6 +235,10 @@ impl FlowManager {
         if let Some(enabled) = patch.rewrite_enabled {
             self.set_rewrite_enabled(enabled);
             applied.rewrite_enabled = Some(enabled);
+        }
+        if let Some(omit) = patch.omit_final_punctuation {
+            self.omit_final_punctuation = omit;
+            applied.omit_final_punctuation = Some(omit);
         }
         Ok(applied)
     }
@@ -253,10 +260,12 @@ pub struct WaveformChunkPayload {
 pub struct Options {
     pub model: String,
     pub rewrite_enabled: bool,
+    pub omit_final_punctuation: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct OptionsPatch {
     pub model: Option<String>,
     pub rewrite_enabled: Option<bool>,
+    pub omit_final_punctuation: Option<bool>,
 }

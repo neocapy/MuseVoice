@@ -104,10 +104,11 @@ pub struct Flow {
     model: String,
     origin: String,
     rewrite_enabled: bool,
+    omit_final_punctuation: bool,
 }
 
 impl Flow {
-    pub fn new(callback: FlowCallback, model: String, origin: String, rewrite_enabled: bool) -> Self {
+    pub fn new(callback: FlowCallback, model: String, origin: String, rewrite_enabled: bool, omit_final_punctuation: bool) -> Self {
         Self {
             state: Arc::new(RwLock::new(FlowState::Idle)),
             callback,
@@ -115,6 +116,7 @@ impl Flow {
             model,
             origin,
             rewrite_enabled,
+            omit_final_punctuation,
         }
     }
 
@@ -245,11 +247,16 @@ impl Flow {
                     transcribed_text = rewritten_text;
                 }
                 Err(e) => {
-                    // Soft fail: just print error and continue with original text
                     eprintln!("Rewrite failed, using original transcription: {}", e.message);
-                    // Could emit a status event here for the UI to show rewrite failed
                 }
             }
+        }
+
+        if self.omit_final_punctuation {
+            transcribed_text = transcribed_text
+                .trim_end_matches(&['.', '!', '?', ';', ','][..])
+                .trim_end()
+                .to_string();
         }
 
         self.set_state(FlowState::Completed).await;
