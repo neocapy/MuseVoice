@@ -2,8 +2,11 @@ use crate::flow::{Flow, FlowCallback, FlowEvent, FlowMode, FlowState};
 use crate::audio_output::AudioOutputManager;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use std::fs;
+use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{oneshot, RwLock};
+use directories::ProjectDirs;
 
 // Global state
 pub type FlowManagerState = Arc<RwLock<Option<FlowManager>>>;
@@ -13,6 +16,27 @@ enum CallbackMode {
     RetryOnly, // Handle only essential events for retry
 }
 
+const DEFAULT_PROMPT_TEXT: &str = "Please fix and rewrite the following dictated text to handle common speech-to-text issues:\n\
+- Convert phonetic alphabet spelling (alpha bravo charlie) to actual letters (\"ABC\"); choose upper or lowercase based on context\n\
+- When appropriate, convert spoken numbers to numerals: \"one two three\" → \"123\"\n\
+- Replace spoken punctuation words with actual punctuation (\"comma\" → \",\", \"period\" → \".\", \"question mark\" → \"?\", etc.)\n\
+- Handle formatting commands (\"camel case whatever\" → \"camelCase\", \"title case whatever\" → \"TitleCase\", etc.)\n\
+- \"new paragraph\" → \"\\n\\n\"\n\
+- \"new line\" → \"\\n\"\n\
+- \"no space hello there\" -> \"hellothere\"\n\
+- Fix any other obvious dictation artifacts\n\
+\n\
+Original text: {}\n\
+\n\
+Return ONLY the corrected text, no explanations or formatting:";
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RewritePrompt {
+    pub id: String,
+    pub name: String,
+    pub text: String,
+}
+
 pub struct FlowManager {
     current_flow: Option<Arc<Flow>>,
     stop_sender: Option<oneshot::Sender<()>>,
@@ -20,17 +44,24 @@ pub struct FlowManager {
     model: String,
     rewrite_enabled: bool,
     omit_final_punctuation: bool,
+    selected_prompt_id: String,
+    custom_prompts: Vec<RewritePrompt>,
+    audio_manager: Arc<Mutex<AudioOutputManager>>,
 }
 
 impl FlowManager {
-    pub fn new() -> Self {
+    pub fn new(audio_manager: Arc<Mutex<AudioOutputManager>>) -> Self {
+        let settings = Self::load_settings();
         Self {
             current_flow: None,
             stop_sender: None,
             retry_audio_data: None,
-            model: "whisper-1".to_string(),
-            rewrite_enabled: false,
-            omit_final_punctuation: false,
+            model: settings.model,
+            rewrite_enabled: settings.rewrite_enabled,
+            omit_final_punctuation: settings.omit_final_punctuation,
+            selected_prompt_id: settings.selected_prompt_id,
+            custom_prompts: settings.custom_prompts,
+            audio_manager,
         }
     }
 
@@ -100,24 +131,26 @@ impl FlowManager {
         })
     }
 
-    pub async fn start_flow(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState, audio_manager: Arc<Mutex<AudioOutputManager>>) -> Result<(), String> {
-        // Cancel any existing flow
+    pub async fn start_flow(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState) -> Result<(), String> {
         self.cancel_flow().await;
 
-        // Create stop channel
         let (stop_sender, stop_receiver) = oneshot::channel();
 
-        // Create callback for flow events
         let callback = Self::create_flow_callback(app_handle, flow_manager_state, CallbackMode::Full);
 
-        // Create and start flow
-        let flow = Arc::new(Flow::new(callback, self.model.clone(), self.rewrite_enabled, self.omit_final_punctuation, audio_manager));
+        let prompt_text = self.get_selected_prompt_text();
+        let flow = Arc::new(Flow::new(
+            callback,
+            self.model.clone(),
+            self.rewrite_enabled,
+            self.omit_final_punctuation,
+            Arc::clone(&self.audio_manager),
+            prompt_text,
+        ));
 
-        // Store references
         self.current_flow = Some(Arc::clone(&flow));
         self.stop_sender = Some(stop_sender);
 
-        // Start the flow in a background task
         tokio::spawn(async move {
             if let Err(e) = flow.run(FlowMode::RecordAndTranscribe { stop_signal: stop_receiver }).await {
                 eprintln!("Flow error: {}", e);
@@ -171,26 +204,28 @@ impl FlowManager {
         self.retry_audio_data.is_some()
     }
 
-    pub async fn retry_transcription(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState, audio_manager: Arc<Mutex<AudioOutputManager>>) -> Result<(), String> {
-        // Get the stored audio data
+    pub async fn retry_transcription(&mut self, app_handle: AppHandle, flow_manager_state: FlowManagerState) -> Result<(), String> {
         let audio_data = self.retry_audio_data.clone().ok_or_else(|| {
             "No recorded audio available for retry".to_string()
         })?;
 
-        // Cancel any existing flow
         self.cancel_flow().await;
 
-        // Create callback for flow events
         let callback = Self::create_flow_callback(app_handle, flow_manager_state, CallbackMode::RetryOnly);
 
-        // Create flow and run transcription only
-        let flow = Arc::new(Flow::new(callback, self.model.clone(), self.rewrite_enabled, self.omit_final_punctuation, audio_manager));
+        let prompt_text = self.get_selected_prompt_text();
+        let flow = Arc::new(Flow::new(
+            callback,
+            self.model.clone(),
+            self.rewrite_enabled,
+            self.omit_final_punctuation,
+            Arc::clone(&self.audio_manager),
+            prompt_text,
+        ));
         let flow_clone = Arc::clone(&flow);
 
-        // Store reference
         self.current_flow = Some(flow);
 
-        // Start the transcription-only flow in a background task
         tokio::spawn(async move {
             if let Err(e) = flow_clone.run(FlowMode::TranscribeOnly { audio_data }).await {
                 eprintln!("Retry transcription error: {}", e);
@@ -215,11 +250,92 @@ impl FlowManager {
         self.rewrite_enabled = enabled;
     }
 
+    fn get_config_path() -> Option<PathBuf> {
+        ProjectDirs::from("com", "muse", "app")
+            .map(|proj_dirs| proj_dirs.config_dir().join("settings.json"))
+    }
+
+    fn load_settings() -> PersistedSettings {
+        if let Some(config_path) = Self::get_config_path() {
+            if config_path.exists() {
+                match fs::read_to_string(&config_path) {
+                    Ok(content) => {
+                        match serde_json::from_str::<PersistedSettings>(&content) {
+                            Ok(settings) => {
+                                println!("Loaded settings from {:?}", config_path);
+                                return settings;
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to parse settings file: {}, using defaults", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to read settings file: {}, using defaults", e);
+                    }
+                }
+            }
+        }
+        PersistedSettings::default()
+    }
+
+    fn save_settings(&self) -> Result<(), String> {
+        let settings = PersistedSettings {
+            model: self.model.clone(),
+            rewrite_enabled: self.rewrite_enabled,
+            omit_final_punctuation: self.omit_final_punctuation,
+            selected_prompt_id: self.selected_prompt_id.clone(),
+            custom_prompts: self.custom_prompts.clone(),
+        };
+
+        let config_path = Self::get_config_path()
+            .ok_or_else(|| "Could not determine config directory".to_string())?;
+
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                format!("Failed to create config directory: {}", e)
+            })?;
+        }
+
+        let json = serde_json::to_string_pretty(&settings)
+            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+
+        fs::write(&config_path, json)
+            .map_err(|e| format!("Failed to write settings file: {}", e))?;
+
+        println!("Saved settings to {:?}", config_path);
+        Ok(())
+    }
+
+    fn get_selected_prompt_text(&self) -> String {
+        if self.selected_prompt_id == "default" {
+            return DEFAULT_PROMPT_TEXT.to_string();
+        }
+
+        self.custom_prompts
+            .iter()
+            .find(|p| p.id == self.selected_prompt_id)
+            .map(|p| p.text.clone())
+            .unwrap_or_else(|| {
+                eprintln!("Selected prompt '{}' not found, using default", self.selected_prompt_id);
+                DEFAULT_PROMPT_TEXT.to_string()
+            })
+    }
+
     pub fn options(&self) -> Options {
+        let mut all_prompts = vec![RewritePrompt {
+            id: "default".to_string(),
+            name: "Default (Built-in)".to_string(),
+            text: DEFAULT_PROMPT_TEXT.to_string(),
+        }];
+        all_prompts.extend(self.custom_prompts.clone());
+
         Options {
             model: self.model.clone(),
             rewrite_enabled: self.rewrite_enabled,
             omit_final_punctuation: self.omit_final_punctuation,
+            selected_prompt_id: self.selected_prompt_id.clone(),
+            custom_prompts: all_prompts,
         }
     }
 
@@ -238,6 +354,24 @@ impl FlowManager {
             self.omit_final_punctuation = omit;
             applied.omit_final_punctuation = Some(omit);
         }
+        if let Some(selected_id) = patch.selected_prompt_id {
+            if selected_id == "default" || self.custom_prompts.iter().any(|p| p.id == selected_id) {
+                self.selected_prompt_id = selected_id.clone();
+                applied.selected_prompt_id = Some(selected_id);
+            } else {
+                return Err(format!("Invalid prompt ID: {}", selected_id));
+            }
+        }
+        if let Some(prompts) = patch.custom_prompts {
+            let filtered_prompts: Vec<RewritePrompt> = prompts
+                .into_iter()
+                .filter(|p| p.id != "default")
+                .collect();
+            self.custom_prompts = filtered_prompts.clone();
+            applied.custom_prompts = Some(filtered_prompts);
+        }
+
+        self.save_settings()?;
         Ok(applied)
     }
 }
@@ -259,6 +393,8 @@ pub struct Options {
     pub model: String,
     pub rewrite_enabled: bool,
     pub omit_final_punctuation: bool,
+    pub selected_prompt_id: String,
+    pub custom_prompts: Vec<RewritePrompt>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -266,4 +402,27 @@ pub struct OptionsPatch {
     pub model: Option<String>,
     pub rewrite_enabled: Option<bool>,
     pub omit_final_punctuation: Option<bool>,
+    pub selected_prompt_id: Option<String>,
+    pub custom_prompts: Option<Vec<RewritePrompt>>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct PersistedSettings {
+    pub model: String,
+    pub rewrite_enabled: bool,
+    pub omit_final_punctuation: bool,
+    pub selected_prompt_id: String,
+    pub custom_prompts: Vec<RewritePrompt>,
+}
+
+impl Default for PersistedSettings {
+    fn default() -> Self {
+        Self {
+            model: "whisper-1".to_string(),
+            rewrite_enabled: false,
+            omit_final_punctuation: false,
+            selected_prompt_id: "default".to_string(),
+            custom_prompts: Vec::new(),
+        }
+    }
 }

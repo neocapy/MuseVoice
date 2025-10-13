@@ -105,10 +105,11 @@ pub struct Flow {
     rewrite_enabled: bool,
     omit_final_punctuation: bool,
     audio_manager: Arc<Mutex<AudioOutputManager>>,
+    rewrite_prompt: String,
 }
 
 impl Flow {
-    pub fn new(callback: FlowCallback, model: String, rewrite_enabled: bool, omit_final_punctuation: bool, audio_manager: Arc<Mutex<AudioOutputManager>>) -> Self {
+    pub fn new(callback: FlowCallback, model: String, rewrite_enabled: bool, omit_final_punctuation: bool, audio_manager: Arc<Mutex<AudioOutputManager>>, rewrite_prompt: String) -> Self {
         Self {
             state: Arc::new(RwLock::new(FlowState::Idle)),
             callback,
@@ -117,6 +118,7 @@ impl Flow {
             rewrite_enabled,
             omit_final_punctuation,
             audio_manager,
+            rewrite_prompt,
         }
     }
 
@@ -716,23 +718,7 @@ Ok(webm_data)
                 message: format!("Failed to create HTTP client: {}", e),
             })?;
 
-        // Construct the rewrite prompt
-        let rewrite_prompt = format!(
-            "Please fix and rewrite the following dictated text to handle common speech-to-text issues:\n\
-            - Convert phonetic alphabet spelling (alpha bravo charlie) to actual letters (\"ABC\"); choose upper or lowercase based on context\n\
-            - When appropriate, convert spoken numbers to numerals: \"one two three\" → \"123\"\n\
-            - Replace spoken punctuation words with actual punctuation (\"comma\" → \",\", \"period\" → \".\", \"question mark\" → \"?\", etc.)\n\
-            - Handle formatting commands (\"camel case whatever\" → \"camelCase\", \"title case whatever\" → \"TitleCase\", etc.)\n\
-            - \"new paragraph\" → \"\n\n\"\n\
-            - \"new line\" → \"\n\"\n\
-            - \"no space hello there\" -> \"hellothere\"\n\
-            - Fix any other obvious dictation artifacts\n\
-            \n\
-            Original text: {}\n\
-            \n\
-            Return ONLY the corrected text, no explanations or formatting:",
-            transcribed_text
-        );
+        let rewrite_prompt = self.rewrite_prompt.replace("{}", transcribed_text);
 
         let request_body = serde_json::json!({
             "model": "gpt-5",

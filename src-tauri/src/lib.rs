@@ -44,7 +44,6 @@ async fn get_status(flow_manager: State<'_, FlowManagerState>) -> Result<StatusR
 #[tauri::command]
 async fn start_audio_stream(
     flow_manager: State<'_, FlowManagerState>,
-    audio_manager: State<'_, AudioOutputManagerState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
     let mut manager_guard = flow_manager.write().await;
@@ -55,8 +54,7 @@ async fn start_audio_stream(
         match current_state {
             FlowState::Idle | FlowState::Completed | FlowState::Error | FlowState::Cancelled => {
                 let flow_manager_clone = Arc::clone(&flow_manager.inner());
-                let audio_manager_clone = Arc::clone(&audio_manager.inner());
-                manager.start_flow(app_handle, flow_manager_clone, audio_manager_clone).await?;
+                manager.start_flow(app_handle, flow_manager_clone).await?;
                 Ok("Audio recording started successfully".to_string())
             }
             _ => Err("Cannot start recording: flow is not idle".to_string()),
@@ -102,15 +100,13 @@ async fn cancel_transcription(flow_manager: State<'_, FlowManagerState>) -> Resu
 #[tauri::command]
 async fn retry_transcription(
     flow_manager: State<'_, FlowManagerState>,
-    audio_manager: State<'_, AudioOutputManagerState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
     let mut manager_guard = flow_manager.write().await;
 
     if let Some(manager) = manager_guard.as_mut() {
         let flow_manager_clone = Arc::clone(&flow_manager.inner());
-        let audio_manager_clone = Arc::clone(&audio_manager.inner());
-        manager.retry_transcription(app_handle, flow_manager_clone, audio_manager_clone).await?;
+        manager.retry_transcription(app_handle, flow_manager_clone).await?;
         Ok("Retrying transcription...".to_string())
     } else {
         Err("Flow manager not initialized".to_string())
@@ -125,7 +121,13 @@ async fn set_transcription_model(
     let mut manager_guard = flow_manager.write().await;
 
     if let Some(manager) = manager_guard.as_mut() {
-        let applied = manager.update_options(OptionsPatch { model: Some(model), rewrite_enabled: None, omit_final_punctuation: None })?;
+        let applied = manager.update_options(OptionsPatch {
+            model: Some(model),
+            rewrite_enabled: None,
+            omit_final_punctuation: None,
+            selected_prompt_id: None,
+            custom_prompts: None,
+        })?;
         let full = manager.options();
         let _ = app_handle.emit("options-changed", OptionsChangedEvent { full, patch: applied });
         Ok("Model updated".to_string())
@@ -143,7 +145,13 @@ async fn set_rewrite_enabled(
     let mut manager_guard = flow_manager.write().await;
 
     if let Some(manager) = manager_guard.as_mut() {
-        let applied = manager.update_options(OptionsPatch { model: None, rewrite_enabled: Some(enabled), omit_final_punctuation: None })?;
+        let applied = manager.update_options(OptionsPatch {
+            model: None,
+            rewrite_enabled: Some(enabled),
+            omit_final_punctuation: None,
+            selected_prompt_id: None,
+            custom_prompts: None,
+        })?;
         let full = manager.options();
         let _ = app_handle.emit("options-changed", OptionsChangedEvent { full, patch: applied });
         Ok("Rewrite setting updated".to_string())
@@ -185,7 +193,13 @@ async fn get_options(flow_manager: State<'_, FlowManagerState>) -> Result<Option
     if let Some(manager) = manager_guard.as_ref() {
         Ok(manager.options())
     } else {
-        Ok(Options { model: "whisper-1".to_string(), rewrite_enabled: false, omit_final_punctuation: false })
+        Ok(Options {
+            model: "whisper-1".to_string(),
+            rewrite_enabled: false,
+            omit_final_punctuation: false,
+            selected_prompt_id: "default".to_string(),
+            custom_prompts: vec![],
+        })
     }
 }
 
@@ -475,7 +489,6 @@ pub fn run() {
                 match parse_shortcut(&shortcut_string) {
                     Ok(shortcut) => {
                         let flow_manager_for_handler = flow_manager.clone();
-                        let audio_manager_for_handler = audio_manager.clone();
                         let app_handle_for_handler = app.handle().clone();
 
                         let handler_result = app.handle().plugin(
@@ -483,24 +496,21 @@ pub fn run() {
                                 .with_handler(move |_app, _triggered_shortcut, event| {
                                     if event.state() == ShortcutState::Pressed {
                                         let flow_manager_clone = flow_manager_for_handler.clone();
-                                        let audio_manager_clone = audio_manager_for_handler.clone();
                                         let app_handle_clone = app_handle_for_handler.clone();
 
-                                        // Spawn async task to handle the shortcut
                                         tauri::async_runtime::spawn(async move {
-                                            // Get current flow state and determine action
                                             let manager_guard = flow_manager_clone.read().await;
 
                                             if let Some(manager) = manager_guard.as_ref() {
                                                 let current_state = manager.get_state().await;
-                                                drop(manager_guard); // Release the read lock
+                                                drop(manager_guard);
 
                                                 match current_state {
                                                     FlowState::Idle | FlowState::Completed | FlowState::Error | FlowState::Cancelled => {
                                                         let mut manager_guard = flow_manager_clone.write().await;
                                                         if let Some(manager) = manager_guard.as_mut() {
                                                             let flow_manager_clone_for_start = Arc::clone(&flow_manager_clone);
-                                                            match manager.start_flow(app_handle_clone.clone(), flow_manager_clone_for_start, audio_manager_clone).await {
+                                                            match manager.start_flow(app_handle_clone.clone(), flow_manager_clone_for_start).await {
                                                                 Ok(_) => println!("✅ Recording started via global shortcut"),
                                                                 Err(e) => {
                                                                     eprintln!("❌ Failed to start recording: {}", e);
@@ -550,10 +560,11 @@ pub fn run() {
             }
 
             let audio_manager_clone = audio_manager.clone();
+            let audio_manager_for_flow = audio_manager.clone();
             let flow_manager_clone = flow_manager.clone();
             tauri::async_runtime::spawn(async move {
                 let mut manager_guard = flow_manager_clone.write().await;
-                *manager_guard = Some(FlowManager::new());
+                *manager_guard = Some(FlowManager::new(audio_manager_for_flow));
                 println!("Flow manager initialized");
                 
                 AudioOutputManager::start_cleanup_task(audio_manager_clone);

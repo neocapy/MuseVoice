@@ -366,3 +366,162 @@ html, body {
   font-size: 16px;
   color: white;
 }
+
+.prompts-list {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prompt-item {
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px) saturate(110%);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 2px 8px rgba(2, 6, 23, 0.08);
+  transition: background 0.2s ease;
+}
+
+.prompt-item:hover {
+  background: var(--glass-hover);
+}
+
+.prompt-item-default {
+  opacity: 0.7;
+}
+
+.prompt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.prompt-name-input {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  background: transparent;
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.prompt-name-input:not(:disabled):hover {
+  background: var(--glass-bg);
+}
+
+.prompt-name-input:not(:disabled):focus {
+  border-color: var(--accent);
+  background: var(--glass-hover);
+}
+
+.prompt-name-input:disabled {
+  cursor: not-allowed;
+}
+
+.prompt-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.prompt-expand-btn {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.1s ease;
+}
+
+.prompt-expand-btn:hover {
+  background: var(--glass-hover);
+}
+
+.prompt-expand-btn:active {
+  transform: scale(0.95);
+}
+
+.prompt-delete-btn {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.1s ease;
+}
+
+.prompt-delete-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+.prompt-delete-btn:active {
+  transform: scale(0.95);
+}
+
+.prompt-text-input {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s ease, background 0.2s ease;
+  line-height: 1.4;
+}
+
+.prompt-text-input:not(:disabled):hover {
+  background: var(--glass-hover);
+}
+
+.prompt-text-input:not(:disabled):focus {
+  border-color: var(--accent);
+  background: var(--glass-hover);
+}
+
+.prompt-text-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.add-prompt-btn {
+  margin-top: 10px;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 8px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px) saturate(110%);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.1s ease;
+  box-shadow: 0 4px 12px rgba(2, 6, 23, 0.08);
+  width: 100%;
+}
+
+.add-prompt-btn:hover {
+  background: var(--glass-hover);
+}
+
+.add-prompt-btn:active {
+  transform: scale(0.98);
+}
