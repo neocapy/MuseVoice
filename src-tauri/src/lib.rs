@@ -10,7 +10,8 @@ pub mod webm;
 use flow_manager::{FlowManager, FlowManagerState, StatusResponse, Options, OptionsPatch};
 use crate::flow::FlowState;
 use std::sync::Arc;
-use tauri::{AppHandle, State, Emitter};
+use tauri::{AppHandle, State, Emitter, Manager};
+use tauri::menu::{Menu, MenuItem, ContextMenu};
 use tokio::sync::RwLock;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use serde::Serialize;
@@ -202,6 +203,27 @@ async fn update_options(
     }
 }
 
+#[tauri::command]
+async fn show_context_menu(app: AppHandle, window: tauri::Window) -> Result<(), String> {
+    let settings_item = MenuItem::with_id(&app, "settings", "Settings", true, None::<&str>)
+        .map_err(|e| format!("Failed to create settings menu item: {}", e))?;
+    let minimize_item = MenuItem::with_id(&app, "minimize", "Minimize", true, None::<&str>)
+        .map_err(|e| format!("Failed to create minimize menu item: {}", e))?;
+    let close_item = MenuItem::with_id(&app, "close", "Close", true, None::<&str>)
+        .map_err(|e| format!("Failed to create close menu item: {}", e))?;
+
+    let menu = Menu::with_items(&app, &[
+        &settings_item,
+        &minimize_item,
+        &close_item,
+    ]).map_err(|e| format!("Failed to create menu: {}", e))?;
+
+    menu.popup(window)
+        .map_err(|e| format!("Failed to show context menu: {}", e))?;
+
+    Ok(())
+}
+
 #[cfg(desktop)]
 fn get_default_shortcut() -> &'static str {
     #[cfg(target_os = "macos")]
@@ -314,7 +336,8 @@ pub fn run() {
             set_transcription_model,
             set_rewrite_enabled,
             get_options,
-            update_options
+            update_options,
+            show_context_menu
         ])
         .setup(move |app| {
             // Setup global shortcut for desktop platforms
@@ -413,6 +436,29 @@ pub fn run() {
                 *manager_guard = Some(FlowManager::new());
                 println!("Flow manager initialized");
             });
+
+            let app_handle = app.handle().clone();
+            app.on_menu_event(move |app, event| {
+                let windows = app.webview_windows();
+                let window = windows.get("main");
+                match event.id().as_ref() {
+                    "minimize" => {
+                        if let Some(window) = window {
+                            let _ = window.minimize();
+                        }
+                    }
+                    "close" => {
+                        if let Some(window) = window {
+                            let _ = window.close();
+                        }
+                    }
+                    "settings" => {
+                        let _ = app_handle.emit("open-settings", serde_json::json!({ "source": "context-menu" }));
+                    }
+                    _ => {}
+                }
+            });
+
             Ok(())
         })
         .run(tauri::generate_context!())

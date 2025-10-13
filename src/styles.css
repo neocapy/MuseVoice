@@ -67,34 +67,24 @@ html, body {
   inset: 0;
   width: 100vw;
   height: 100vh;
+  cursor: grab;
+}
+
+.uiroot-canvas:active {
+  cursor: grabbing;
 }
 
 .ui-controls {
   position: absolute;
   inset: 0;
-  pointer-events: none; /* allow dragging window anywhere */
+  pointer-events: none;
 }
 
-.ui-controls .left-controls,
-.ui-controls .right-controls,
 .ui-controls .bottom-right {
   position: absolute;
   display: flex;
   gap: 8px;
-  pointer-events: auto; /* enable interaction on controls */
-}
-
-.ui-controls .left-controls {
-  top: 4px;
-  left: 4px;
-}
-
-.ui-controls .right-controls {
-  top: 2px;
-  right: 2px;
-}
-
-.ui-controls .bottom-right {
+  pointer-events: auto;
   right: 6px;
   bottom: 6px;
 }

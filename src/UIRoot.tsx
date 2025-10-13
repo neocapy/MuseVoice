@@ -1,7 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { emit } from "@tauri-apps/api/event";
 
 import { useBackendListeners } from "./hooks/useBackendListeners";
 import doneSound from "./done.wav";
@@ -24,7 +23,7 @@ type Theme = {
 
 const defaultTheme: Theme = {
   bgIdle: "#e5e7eb", // light slate-ish gray
-  bgProcessing: "#dbeafe", // soft blue tint
+  bgProcessing: "#c5cad9", // soft orange tint
   bgRecording: "#fee2e2", // light red tint
   glassOverlay: "rgba(255,255,255,0.18)",
   controlBg: "rgba(255,255,255,0.24)",
@@ -52,6 +51,7 @@ export default function UIRoot() {
   const [waveformBins, setWaveformBins] = useState<number[]>([]);
   const [waveformAvgRms, setWaveformAvgRms] = useState<number>(0);
   const [retryVisible, setRetryVisible] = useState<boolean>(false);
+  const waveformUpdateCountRef = useRef<number>(0);
 
   const dpr = useDpr();
   // Adjust theme for recording look: light slate blue bg, icy white waveform
@@ -125,12 +125,24 @@ export default function UIRoot() {
     setStatus("ready");
   }, []);
 
+  const wrappedSetWaveformBins = useCallback((bins: number[]) => {
+    setWaveformBins(bins);
+    waveformUpdateCountRef.current += 1;
+  }, []);
+
+  const wrappedSetStatus = useCallback((newStatus: FrontendStatus) => {
+    setStatus(newStatus);
+    if (newStatus === "recording") {
+      waveformUpdateCountRef.current = 0;
+    }
+  }, []);
+
   useBackendListeners({
     insertMode: false,
     transcriptionText: "",
     isExpanded: false,
-    setStatus,
-    setWaveformBins,
+    setStatus: wrappedSetStatus,
+    setWaveformBins: wrappedSetWaveformBins,
     setWaveformAvgRms,
     setTranscriptionText: () => {},
     setLayoutMode: () => {},
@@ -185,22 +197,43 @@ export default function UIRoot() {
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
 
-      // Background color per status
       let baseBg = theme.bgIdle;
-      if (status === "processing") baseBg = "#d9e8ff"; // slate-blue while processing
-      if (status === "recording") baseBg = "#d3e4ff"; // light slate blue
+      if (status === "processing") baseBg = theme.bgProcessing;
+      if (status === "recording") {
+        const targetBg = "#d3e4ff";
+        const updateCount = waveformUpdateCountRef.current;
+        const t = clamp(updateCount / 5, 0, 1);
+        
+        const lerpColor = (from: string, to: string, t: number): string => {
+          const fromRgb = {
+            r: parseInt(from.slice(1, 3), 16),
+            g: parseInt(from.slice(3, 5), 16),
+            b: parseInt(from.slice(5, 7), 16),
+          };
+          const toRgb = {
+            r: parseInt(to.slice(1, 3), 16),
+            g: parseInt(to.slice(3, 5), 16),
+            b: parseInt(to.slice(5, 7), 16),
+          };
+          const r = Math.round(fromRgb.r + (toRgb.r - fromRgb.r) * t);
+          const g = Math.round(fromRgb.g + (toRgb.g - fromRgb.g) * t);
+          const b = Math.round(fromRgb.b + (toRgb.b - fromRgb.b) * t);
+          return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+        };
+        
+        baseBg = lerpColor(theme.bgIdle, targetBg, t);
+      }
 
       ctx.clearRect(0, 0, w, h);
       ctx.fillStyle = baseBg;
       ctx.fillRect(0, 0, w, h);
 
-      // Subtle glass overlay gradient (recording: darker along center line to contrast white waveform)
       const grad = ctx.createLinearGradient(0, 0, 0, h);
       if (status === "recording") {
         grad.addColorStop(0, "rgba(255,255,255,0.18)");
-        grad.addColorStop(0.45, "rgba(0,0,0,0.12)");
-        grad.addColorStop(0.5, "rgba(0,0,0,0.18)");
-        grad.addColorStop(0.55, "rgba(0,0,0,0.12)");
+        grad.addColorStop(0.45, "rgba(0,0,0,0.03)");
+        grad.addColorStop(0.5, "rgba(0,0,0,0.05)");
+        grad.addColorStop(0.55, "rgba(0,0,0,0.03)");
         grad.addColorStop(1, "rgba(255,255,255,0.12)");
       } else {
         grad.addColorStop(0, "rgba(255,255,255,0.28)");
@@ -211,7 +244,6 @@ export default function UIRoot() {
       ctx.fillRect(0, 0, w, h);
 
       if (status === "recording") {
-        // Draw full-bleed waveform (edge to edge)
         const bins = waveformBins && waveformBins.length > 0 ? waveformBins : new Array(256).fill(0);
         const left = 0;
         const right = w;
@@ -224,12 +256,11 @@ export default function UIRoot() {
         const rmsToDbScale = (r: number) => {
           const eps = 1e-8;
           const db = 20 * Math.log10(Math.max(r, eps));
-          const t = (db + 45) / 45; // -45 dB -> 0, 0 dB -> 1
+          const t = (db + 45) / 45;
           return clamp(t, 0, 1);
         };
         const avg = rmsToDbScale(waveformAvgRms || 0);
 
-        // Amplitude envelope: allow reaching full height; icy white fill
         const amp = Math.max(h * 0.48, 32) * (0.7 + 0.45 * avg);
         const fill = `rgba(255, 255, 255, ${0.96})`;
 
@@ -250,7 +281,6 @@ export default function UIRoot() {
         }
         ctx.closePath();
         ctx.fillStyle = fill;
-        // Fill first, then crisp crest stroke for presence
         ctx.fill();
         ctx.beginPath();
         for (let i = 0; i < bins.length; i++) {
@@ -264,45 +294,36 @@ export default function UIRoot() {
         ctx.lineWidth = 1;
         ctx.stroke();
         ctx.restore();
-      } else {
-        // Idle / processing: 5-dot elliptical orbit with perspective-ish scaling & latch near front
+      } else if (status === "processing") {
         const cx = w / 2;
         const cy = h / 2;
-        const Rx = Math.min(w, h) * 0.32;
-        const Ry = Rx * 0.52; // tilt to feel 3D
+        const radius = 8;
 
-        // Orientation fix: camera above, so near-front should appear at lower y (positive sin -> lower)
-        // We achieve this by inverting the sign on the sin term when mapping to y depth for size/alpha
+        const sector = (Math.PI * 2) / 3;
+        const p = (angle % sector) / sector;
+        const half = p < 0.5 ? p / 0.5 : (1 - p) / 0.5;
+        const eased = half * half;
+        const base = 0.35;
+        const stepSpeed = 2.4;
+        angle += (base + stepSpeed * eased) * dt * sector;
 
-        // Latching step motion: advance in 72° sectors with ease-in/out per half-sector
-        const sector = (Math.PI * 2) / 5; // 72°
-        if (status === "processing") {
-          // Ensure base motion so it doesn't stall
-          const p = (angle % sector) / sector;
-          const half = p < 0.5 ? p / 0.5 : (1 - p) / 0.5; // 0->1 then 1->0
-          const eased = half * half; // quadratic ease
-          const base = 0.35; // base sector/s to keep motion alive
-          const stepSpeed = 2.4; // step rate
-          angle += (base + stepSpeed * eased) * dt * sector;
-        } else {
-          // idle: lock to nearest rest position
-          const k = Math.round(angle / sector);
-          angle = k * sector;
-        }
-
-        const N = 5;
+        const N = 3;
         for (let i = 0; i < N; i++) {
           const a = angle + (i * 2 * Math.PI) / N;
-          const x = cx + Rx * Math.cos(a);
-          const y = cy + Ry * Math.sin(a);
-          const depth = 0.5 + 0.5 * (1 + Math.sin(a)); // camera above => sin(a)>0 is closer
-          const r = 4 + 6 * depth;
-          const alpha = 0.35 + 0.45 * depth;
+          const x = cx + radius * Math.cos(a);
+          const y = cy + radius * Math.sin(a);
           ctx.beginPath();
-          ctx.fillStyle = `rgba(15, 23, 42, ${alpha.toFixed(3)})`;
-          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(15, 23, 42, 0.5)";
+          ctx.arc(x, y, 4, 0, Math.PI * 2);
           ctx.fill();
         }
+      } else {
+        const cx = w / 2;
+        const cy = h / 2;
+        ctx.beginPath();
+        ctx.fillStyle = "rgba(185, 28, 28, 0.75)";
+        ctx.arc(cx, cy, 8, 0, Math.PI * 2);
+        ctx.fill();
       }
 
       raf = requestAnimationFrame(draw);
@@ -315,45 +336,6 @@ export default function UIRoot() {
     return () => cancelAnimationFrame(raf);
   }, [status, waveformBins, waveformAvgRms, theme]);
 
-  const onMinimize = useCallback(async () => {
-    try {
-      await getCurrentWindow().minimize();
-    } catch (e) {
-      console.error("Failed to minimize window:", e);
-    }
-  }, []);
-
-  const onClose = useCallback(async () => {
-    try {
-      await getCurrentWindow().close();
-    } catch (e) {
-      console.error("Failed to close window:", e);
-    }
-  }, []);
-
-  const onSettings = useCallback(async () => {
-    console.log("Settings clicked (stub). Emitting 'open-settings' event.");
-    try {
-      await emit("open-settings", { source: "uiroot" });
-    } catch (e) {
-      console.error("Failed to emit open-settings:", e);
-    }
-  }, []);
-
-  const onPlayPause = useCallback(async () => {
-    try {
-      if (status === "ready") {
-        await invoke<string>("start_audio_stream", { origin: "ui-button" });
-      } else if (status === "recording") {
-        await invoke<string>("stop_audio_stream", { origin: "ui-button" });
-      } else if (status === "processing") {
-        await invoke<string>("cancel_transcription", { origin: "ui-button" });
-      }
-    } catch (e) {
-      console.error("Failed to toggle play/pause:", e);
-    }
-  }, [status]);
-
   const onRetry = useCallback(async () => {
     try {
       await invoke<string>("retry_transcription", { origin: "ui-button" });
@@ -362,29 +344,74 @@ export default function UIRoot() {
     }
   }, []);
 
-  // Whole window drag region; buttons explicitly no-drag
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    let mouseDownPos: { x: number; y: number; time: number } | null = null;
+
+    const onMouseDown = async (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      mouseDownPos = { x: e.clientX, y: e.clientY, time: Date.now() };
+      
+      try {
+        await getCurrentWindow().startDragging();
+      } catch (err) {
+        console.error("Failed to start dragging:", err);
+      }
+    };
+
+    const onMouseUp = async (e: MouseEvent) => {
+      if (!mouseDownPos || e.button !== 0) return;
+
+      const dx = e.clientX - mouseDownPos.x;
+      const dy = e.clientY - mouseDownPos.y;
+      const dt = Date.now() - mouseDownPos.time;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < 5 && dt < 300) {
+        try {
+          if (status === "ready") {
+            await invoke<string>("start_audio_stream", { origin: "canvas-click" });
+          } else if (status === "recording") {
+            await invoke<string>("stop_audio_stream", { origin: "canvas-click" });
+          } else if (status === "processing") {
+            await invoke<string>("cancel_transcription", { origin: "canvas-click" });
+          }
+        } catch (err) {
+          console.error("Failed to toggle recording via canvas click:", err);
+        }
+      }
+
+      mouseDownPos = null;
+    };
+
+    const onContextMenu = async (e: MouseEvent) => {
+      e.preventDefault();
+      try {
+        await invoke("show_context_menu");
+      } catch (err) {
+        console.error("Failed to show context menu:", err);
+      }
+    };
+
+    canvas.addEventListener("mousedown", onMouseDown);
+    canvas.addEventListener("mouseup", onMouseUp);
+    canvas.addEventListener("contextmenu", onContextMenu);
+
+    return () => {
+      canvas.removeEventListener("mousedown", onMouseDown);
+      canvas.removeEventListener("mouseup", onMouseUp);
+      canvas.removeEventListener("contextmenu", onContextMenu);
+    };
+  }, [status]);
+
   return (
-    <div className="uiroot" data-tauri-drag-region>
+    <div className="uiroot">
       <canvas ref={canvasRef} className="uiroot-canvas" />
 
       <div className="ui-controls">
-        <div className="left-controls">
-          <button className="ctrl btn settings no-drag" onClick={onSettings} title="Settings (stub)">
-            ⚙️
-          </button>
-        </div>
-        <div className="right-controls">
-          <button className="ctrl btn no-drag" onClick={onMinimize} title="Minimize">
-            −
-          </button>
-          <button className="ctrl btn no-drag" onClick={onClose} title="Close">
-            ✕
-          </button>
-        </div>
         <div className="bottom-right">
-          <button className="ctrl pill no-drag" onClick={onPlayPause} title="Play / Pause">
-            {status === "recording" ? "⏹" : status === "processing" ? "⏹" : "⏺"}
-          </button>
           {retryVisible && (
             <button className="ctrl pill ghost no-drag" onClick={onRetry} title="Retry last">
               Retry
