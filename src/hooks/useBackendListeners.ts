@@ -90,9 +90,12 @@ export function useBackendListeners({
         // Transcription result
         unsubs.push(
           await listen<string>("transcription-result", async (event) => {
-            if (!mounted) return;
             const incoming = event.payload || "";
             let processedText = incoming;
+            if (!mounted) {
+              copyToClipboard(processedText);
+              return;
+            }
 
             if (insertMode && textareaRef.current) {
               const currentText = transcriptionText;
