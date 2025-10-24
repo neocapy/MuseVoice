@@ -1,6 +1,5 @@
 import { useEffect } from "react";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
 
 type FrontendStatus = "loading" | "ready" | "recording" | "processing";
 type FlowState = "idle" | "recording" | "processing" | "completed" | "error" | "cancelled";

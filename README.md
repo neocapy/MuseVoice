@@ -11,6 +11,8 @@
 - "Open settings folder" does not shell out correctly on Mac and is untested on other platforms
 - No Linux testing has been done
 - No testing of output device switch while holding output stream
+- Settings window positioning is broken on Mac (and on other platforms?)
+
 
 ## License
 
