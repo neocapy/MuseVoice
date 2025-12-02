@@ -8,7 +8,7 @@ pub mod ebml;
 pub mod opus;
 pub mod webm;
 
-use flow_manager::{FlowManager, FlowManagerState, StatusResponse, Options, OptionsPatch};
+use flow_manager::{FlowManager, FlowManagerState, StatusResponse, Options, OptionsPatch, TranscriptionHistoryEntry};
 use crate::flow::FlowState;
 use crate::audio_output::AudioOutputManager;
 use std::sync::{Arc, Mutex};
@@ -17,6 +17,7 @@ use tauri::menu::{Menu, MenuItem, ContextMenu};
 use tokio::sync::RwLock;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use serde::Serialize;
+use enigo::{Enigo, Keyboard, Settings};
 
 #[cfg(desktop)]
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
@@ -129,6 +130,7 @@ async fn set_transcription_model(
             custom_prompts: None,
             api_key: None,
             shortcuts: None,
+            output_mode: None,
         })?;
         let full = manager.options();
         let _ = app_handle.emit("options-changed", OptionsChangedEvent { full, patch: applied });
@@ -155,6 +157,7 @@ async fn set_rewrite_enabled(
             custom_prompts: None,
             api_key: None,
             shortcuts: None,
+            output_mode: None,
         })?;
         let full = manager.options();
         let _ = app_handle.emit("options-changed", OptionsChangedEvent { full, patch: applied });
@@ -178,10 +181,56 @@ async fn has_retry_data(flow_manager: State<'_, FlowManagerState>) -> Result<boo
 
 #[tauri::command]
 async fn copy_to_clipboard(text: String, app_handle: AppHandle) -> Result<String, String> {
-    // Use Tauri's clipboard API through the app handle
+    copy_to_clipboard_impl(&text, &app_handle)
+}
+
+pub fn copy_to_clipboard_impl(text: &str, app_handle: &AppHandle) -> Result<String, String> {
     match app_handle.clipboard().write_text(text) {
         Ok(_) => Ok("Text copied to clipboard successfully".to_string()),
         Err(e) => Err(format!("Failed to copy text to clipboard: {}", e)),
+    }
+}
+
+pub fn type_text_impl(text: &str) -> Result<String, String> {
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| format!("Failed to initialize enigo: {}", e))?;
+    enigo.text(text)
+        .map_err(|e| format!("Failed to type text: {}", e))?;
+    Ok("Text typed successfully".to_string())
+}
+
+#[tauri::command]
+async fn type_text(text: String) -> Result<String, String> {
+    type_text_impl(&text)
+}
+
+#[tauri::command]
+async fn get_transcription_history(
+    flow_manager: State<'_, FlowManagerState>,
+) -> Result<Vec<TranscriptionHistoryEntry>, String> {
+    let manager_guard = flow_manager.read().await;
+    if let Some(manager) = manager_guard.as_ref() {
+        Ok(manager.get_history())
+    } else {
+        Ok(vec![])
+    }
+}
+
+#[tauri::command]
+async fn copy_history_entry(
+    flow_manager: State<'_, FlowManagerState>,
+    app_handle: AppHandle,
+    index: usize,
+) -> Result<String, String> {
+    let manager_guard = flow_manager.read().await;
+    if let Some(manager) = manager_guard.as_ref() {
+        if let Some(text) = manager.get_history_entry(index) {
+            copy_to_clipboard_impl(&text, &app_handle)
+        } else {
+            Err(format!("No history entry at index {}", index))
+        }
+    } else {
+        Err("Flow manager not initialized".to_string())
     }
 }
 
@@ -206,6 +255,7 @@ async fn get_options(flow_manager: State<'_, FlowManagerState>) -> Result<Option
             api_key: String::new(),
             api_key_from_env: std::env::var("OPENAI_API_KEY").is_ok(),
             shortcuts: "Alt+Slash".to_string(),
+            output_mode: "clipboard".to_string(),
         })
     }
 }
@@ -229,6 +279,8 @@ async fn update_options(
 
 #[tauri::command]
 async fn show_context_menu(app: AppHandle, window: tauri::Window) -> Result<(), String> {
+    let history_item = MenuItem::with_id(&app, "history", "History", true, None::<&str>)
+        .map_err(|e| format!("Failed to create history menu item: {}", e))?;
     let settings_item = MenuItem::with_id(&app, "settings", "Settings", true, None::<&str>)
         .map_err(|e| format!("Failed to create settings menu item: {}", e))?;
     let minimize_item = MenuItem::with_id(&app, "minimize", "Minimize", true, None::<&str>)
@@ -237,6 +289,7 @@ async fn show_context_menu(app: AppHandle, window: tauri::Window) -> Result<(), 
         .map_err(|e| format!("Failed to create close menu item: {}", e))?;
 
     let menu = Menu::with_items(&app, &[
+        &history_item,
         &settings_item,
         &minimize_item,
         &close_item,
@@ -366,6 +419,106 @@ async fn close_settings_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
         window.close()
             .map_err(|e| format!("Failed to close settings window: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_history_window(app: AppHandle) -> Result<(), String> {
+    if let Some(existing) = app.get_webview_window("history") {
+        existing.set_focus()
+            .map_err(|e| format!("Failed to focus history window: {}", e))?;
+        return Ok(());
+    }
+
+    use tauri::{WebviewUrl, WebviewWindowBuilder, PhysicalPosition};
+    
+    let history_width = 500.0;
+    let history_height = 600.0;
+    let padding = 20.0;
+
+    let mut position: Option<PhysicalPosition<f64>> = None;
+
+    if let Some(main_window) = app.get_webview_window("main") {
+        if let (Ok(main_pos), Ok(main_size)) = (main_window.outer_position(), main_window.outer_size()) {
+            let main_x = main_pos.x as f64;
+            let main_y = main_pos.y as f64;
+            let main_width = main_size.width as f64;
+            let main_height = main_size.height as f64;
+
+            if let Ok(Some(monitor)) = main_window.current_monitor() {
+                let monitor_pos = monitor.position();
+                let monitor_size = monitor.size();
+                let monitor_x = monitor_pos.x as f64;
+                let monitor_y = monitor_pos.y as f64;
+                let monitor_width = monitor_size.width as f64;
+                let monitor_height = monitor_size.height as f64;
+
+                let main_center_x = main_x + main_width / 2.0;
+                let history_center_offset = history_width / 2.0;
+
+                let try_below_y = main_y + main_height + padding;
+                if try_below_y + history_height <= monitor_y + monitor_height {
+                    let x = (main_center_x - history_center_offset).max(monitor_x).min(monitor_x + monitor_width - history_width);
+                    position = Some(PhysicalPosition::new(x, try_below_y));
+                }
+
+                if position.is_none() {
+                    let try_above_y = main_y - history_height - padding;
+                    if try_above_y >= monitor_y {
+                        let x = (main_center_x - history_center_offset).max(monitor_x).min(monitor_x + monitor_width - history_width);
+                        position = Some(PhysicalPosition::new(x, try_above_y));
+                    }
+                }
+
+                if position.is_none() {
+                    let main_center_y = main_y + main_height / 2.0;
+                    let history_center_y_offset = history_height / 2.0;
+                    
+                    let try_right_x = main_x + main_width + padding;
+                    if try_right_x + history_width <= monitor_x + monitor_width {
+                        let y = (main_center_y - history_center_y_offset).max(monitor_y).min(monitor_y + monitor_height - history_height);
+                        position = Some(PhysicalPosition::new(try_right_x, y));
+                    }
+                }
+
+                if position.is_none() {
+                    let main_center_y = main_y + main_height / 2.0;
+                    let history_center_y_offset = history_height / 2.0;
+                    
+                    let try_left_x = main_x - history_width - padding;
+                    if try_left_x >= monitor_x {
+                        let y = (main_center_y - history_center_y_offset).max(monitor_y).min(monitor_y + monitor_height - history_height);
+                        position = Some(PhysicalPosition::new(try_left_x, y));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut builder = WebviewWindowBuilder::new(&app, "history", WebviewUrl::App("history.html".into()))
+        .title("Transcription History")
+        .inner_size(history_width, history_height)
+        .resizable(true)
+        .visible(true);
+
+    if let Some(pos) = position {
+        builder = builder.position(pos.x, pos.y);
+    } else {
+        builder = builder.center();
+    }
+
+    let _window = builder.build()
+        .map_err(|e| format!("Failed to create history window: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn close_history_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("history") {
+        window.close()
+            .map_err(|e| format!("Failed to close history window: {}", e))?;
     }
     Ok(())
 }
@@ -515,6 +668,9 @@ pub fn run() {
             retry_transcription,
             has_retry_data,
             copy_to_clipboard,
+            type_text,
+            get_transcription_history,
+            copy_history_entry,
             set_transcription_model,
             set_rewrite_enabled,
             get_options,
@@ -522,6 +678,8 @@ pub fn run() {
             show_context_menu,
             open_settings_window,
             close_settings_window,
+            open_history_window,
+            close_history_window,
             open_settings_folder
         ])
         .setup(move |app| {
@@ -638,6 +796,14 @@ pub fn run() {
                                 if e != "Settings window already open" {
                                     eprintln!("Failed to open settings window: {}", e);
                                 }
+                            }
+                        });
+                    }
+                    "history" => {
+                        let app_handle_clone = app_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = open_history_window(app_handle_clone).await {
+                                eprintln!("Failed to open history window: {}", e);
                             }
                         });
                     }

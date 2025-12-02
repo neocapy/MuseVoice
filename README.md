@@ -2,7 +2,6 @@
 
 ## Known Issues / TODOs
 
-- Does not compile on Windows
 - Global shortcut settings UI changes only take effect on reload and are not validated or tested
 - No dark mode
 - No validation for prompt templates
@@ -12,6 +11,8 @@
 - No Linux testing has been done
 - No testing of output device switch while holding output stream
 - Settings window positioning is broken on Mac (and on other platforms?)
+- Flow error: audio thread error: failure to build stream: a backend-specific error has occurred: 0x88890008
+-
 
 
 ## License

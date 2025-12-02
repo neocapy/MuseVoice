@@ -17,6 +17,7 @@ interface Options {
   api_key: string;
   api_key_from_env: boolean;
   shortcuts: string;
+  output_mode: string;
 }
 
 export default function Settings() {
@@ -29,6 +30,7 @@ export default function Settings() {
     api_key: "",
     api_key_from_env: false,
     shortcuts: "Alt+Slash",
+    output_mode: "clipboard",
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -89,6 +91,7 @@ export default function Settings() {
           custom_prompts: customPromptsOnly,
           api_key: options.api_key,
           shortcuts: options.shortcuts,
+          output_mode: options.output_mode,
         },
       });
 
@@ -206,6 +209,25 @@ export default function Settings() {
             <option value="gpt-4o-transcribe">GPT-4o Transcribe</option>
           </select>
         </label>
+      </div>
+
+      <div className="settings-section">
+        <label className="settings-label">
+          Output Mode
+          <select
+            className="settings-select"
+            value={options.output_mode}
+            onChange={(e) => setOptions({ ...options, output_mode: e.target.value })}
+          >
+            <option value="clipboard">Copy to Clipboard</option>
+            <option value="type">Type Keystrokes</option>
+          </select>
+        </label>
+        <p className="settings-hint">
+          {options.output_mode === "type" 
+            ? "Simulates keyboard input into the focused window (requires Accessibility permission)"
+            : "Copies transcription to clipboard"}
+        </p>
       </div>
 
       <div className="settings-section">

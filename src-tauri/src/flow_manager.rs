@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::fs;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{oneshot, RwLock};
 use directories::ProjectDirs;
@@ -37,6 +38,12 @@ pub struct RewritePrompt {
     pub text: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TranscriptionHistoryEntry {
+    pub text: String,
+    pub timestamp: u64,
+}
+
 pub struct FlowManager {
     current_flow: Option<Arc<Flow>>,
     stop_sender: Option<oneshot::Sender<()>>,
@@ -48,6 +55,8 @@ pub struct FlowManager {
     custom_prompts: Vec<RewritePrompt>,
     api_key: String,
     shortcuts: String,
+    output_mode: String,
+    transcription_history: Vec<TranscriptionHistoryEntry>,
     audio_manager: Arc<Mutex<AudioOutputManager>>,
 }
 
@@ -65,6 +74,8 @@ impl FlowManager {
             custom_prompts: settings.custom_prompts,
             api_key: settings.api_key,
             shortcuts: settings.shortcuts,
+            output_mode: settings.output_mode,
+            transcription_history: Vec::new(),
             audio_manager,
         }
     }
@@ -79,12 +90,26 @@ impl FlowManager {
                     let _ = app_handle_clone.emit("flow-state-changed", &state);
                 }
                 (_, FlowEvent::TranscriptionResult(text)) => {
-                    // Clear retry data on successful transcription
+                    let text_for_history = text.clone();
+                    let text_for_output = text.clone();
+                    let app_handle_for_output = app_handle_clone.clone();
                     if let Some(manager_arc) = flow_manager_weak.upgrade() {
                         tokio::spawn(async move {
                             let mut manager_guard = manager_arc.write().await;
                             if let Some(manager) = manager_guard.as_mut() {
                                 manager.clear_audio_data();
+                                manager.add_to_history(text_for_history);
+                                let output_mode = manager.get_output_mode().to_string();
+                                drop(manager_guard);
+                                
+                                if output_mode == "type" {
+                                    if let Err(e) = crate::type_text_impl(&text_for_output) {
+                                        eprintln!("Failed to type text: {}", e);
+                                        let _ = crate::copy_to_clipboard_impl(&text_for_output, &app_handle_for_output);
+                                    }
+                                } else {
+                                    let _ = crate::copy_to_clipboard_impl(&text_for_output, &app_handle_for_output);
+                                }
                             }
                         });
                     }
@@ -300,6 +325,7 @@ impl FlowManager {
             custom_prompts: self.custom_prompts.clone(),
             api_key: self.api_key.clone(),
             shortcuts: self.shortcuts.clone(),
+            output_mode: self.output_mode.clone(),
         };
 
         let config_path = Self::get_config_path()
@@ -355,7 +381,28 @@ impl FlowManager {
             api_key: self.api_key.clone(),
             api_key_from_env,
             shortcuts: self.shortcuts.clone(),
+            output_mode: self.output_mode.clone(),
         }
+    }
+
+    pub fn add_to_history(&mut self, text: String) {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.transcription_history.push(TranscriptionHistoryEntry { text, timestamp });
+    }
+
+    pub fn get_history(&self) -> Vec<TranscriptionHistoryEntry> {
+        self.transcription_history.clone()
+    }
+
+    pub fn get_history_entry(&self, index: usize) -> Option<String> {
+        self.transcription_history.get(index).map(|e| e.text.clone())
+    }
+
+    pub fn get_output_mode(&self) -> &str {
+        &self.output_mode
     }
 
     fn has_valid_api_key(&self) -> bool {
@@ -413,6 +460,15 @@ impl FlowManager {
             self.shortcuts = shortcuts.clone();
             applied.shortcuts = Some(shortcuts);
         }
+        if let Some(output_mode) = patch.output_mode {
+            match output_mode.as_str() {
+                "clipboard" | "type" => {
+                    self.output_mode = output_mode.clone();
+                    applied.output_mode = Some(output_mode);
+                }
+                _ => return Err(format!("Invalid output mode: {}", output_mode)),
+            }
+        }
 
         self.save_settings()?;
         Ok(applied)
@@ -441,6 +497,7 @@ pub struct Options {
     pub api_key: String,
     pub api_key_from_env: bool,
     pub shortcuts: String,
+    pub output_mode: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -452,6 +509,7 @@ pub struct OptionsPatch {
     pub custom_prompts: Option<Vec<RewritePrompt>>,
     pub api_key: Option<String>,
     pub shortcuts: Option<String>,
+    pub output_mode: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -465,6 +523,12 @@ struct PersistedSettings {
     pub api_key: String,
     #[serde(default = "default_shortcuts")]
     pub shortcuts: String,
+    #[serde(default = "default_output_mode")]
+    pub output_mode: String,
+}
+
+fn default_output_mode() -> String {
+    "clipboard".to_string()
 }
 
 fn default_shortcuts() -> String {
@@ -481,6 +545,7 @@ impl Default for PersistedSettings {
             custom_prompts: Vec::new(),
             api_key: String::new(),
             shortcuts: default_shortcuts(),
+            output_mode: default_output_mode(),
         }
     }
 }

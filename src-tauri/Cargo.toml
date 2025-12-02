@@ -33,6 +33,7 @@ tauri-plugin-clipboard-manager = "2"
 crossbeam-channel = "0.5"
 symphonia = { version = "0.5.5", features = ["mp3", "wav"] }
 directories = "6.0.0"
+enigo = "0.6.1"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2.3.0"

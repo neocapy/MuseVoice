@@ -26,6 +26,7 @@ export default defineConfig(async () => ({
       input: {
         main: resolve(__dirname, "index.html"),
         settings: resolve(__dirname, "settings.html"),
+        history: resolve(__dirname, "history.html"),
       },
     },
   },

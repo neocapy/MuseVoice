@@ -600,3 +600,175 @@ html, body {
 .add-prompt-btn:active {
   transform: scale(0.98);
 }
+
+/* History Window Styles */
+.history-container {
+  padding: 16px 14px 80px 14px;
+  background: linear-gradient(135deg, #e5e5e6 0%, #e0e0e1 45%, #e8e8e9 100%);
+  min-height: 100vh;
+  max-height: 100vh;
+  overflow-y: auto;
+  color: var(--text-primary);
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0,0,0,0.28) transparent;
+}
+
+.history-container::-webkit-scrollbar {
+  width: 10px;
+}
+
+.history-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.history-container::-webkit-scrollbar-thumb {
+  background-color: rgba(0,0,0,0.28);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+.history-container::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0,0,0,0.38);
+}
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.history-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-shadow: 0 1px 3px rgba(255, 255, 255, 0.8);
+}
+
+.history-copy-all-btn {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px) saturate(110%);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.1s ease;
+  box-shadow: 0 4px 12px rgba(2, 6, 23, 0.08);
+}
+
+.history-copy-all-btn:hover {
+  background: var(--glass-hover);
+}
+
+.history-copy-all-btn:active {
+  transform: scale(0.98);
+}
+
+.history-loading {
+  text-align: center;
+  padding: 40px;
+  font-size: 16px;
+  color: var(--text-secondary);
+}
+
+.history-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-secondary);
+}
+
+.history-empty p {
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+
+.history-empty-hint {
+  font-size: 13px !important;
+  opacity: 0.7;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.history-entry {
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px) saturate(110%);
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 8px 26px rgba(2, 6, 23, 0.10), 0 1px 3px rgba(2, 6, 23, 0.06);
+  transition: background 0.2s ease;
+}
+
+.history-entry:hover {
+  background: var(--glass-hover);
+}
+
+.history-entry-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.history-entry-time {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.history-entry-copy-btn {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.1s ease;
+}
+
+.history-entry-copy-btn:hover {
+  background: var(--glass-hover);
+}
+
+.history-entry-copy-btn:active {
+  transform: scale(0.95);
+}
+
+.history-entry-text {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  word-break: break-word;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.history-actions {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px) saturate(110%);
+  border-top: 1px solid var(--glass-border);
+  box-shadow: 0 -6px 20px rgba(2, 6, 23, 0.10);
+  z-index: 200;
+}
