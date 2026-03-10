@@ -169,10 +169,7 @@ export default function UIRoot() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    let raf = 0;
-
-    const draw = (_ts: number) => {
-
+    const draw = () => {
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
 
@@ -284,11 +281,11 @@ export default function UIRoot() {
         ctx.fill();
       }
 
-      raf = requestAnimationFrame(draw);
     };
 
-    draw(performance.now());
-    return () => cancelAnimationFrame(raf);
+    draw();
+    const interval = setInterval(draw, 1000 / 30);
+    return () => clearInterval(interval);
   }, [status, waveformBins, waveformAvgRms, theme]);
 
   const onRetry = useCallback(async () => {
