@@ -121,6 +121,9 @@ export default function UIRoot() {
     }
   }, []);
 
+  const noopSetText = useCallback(() => {}, []);
+  const noopSetLayout = useCallback((_mode: "expanded" | "collapsed" | "h-collapsed") => {}, []);
+
   useBackendListeners({
     insertMode: false,
     transcriptionText: "",
@@ -128,8 +131,8 @@ export default function UIRoot() {
     setStatus: wrappedSetStatus,
     setWaveformBins: wrappedSetWaveformBins,
     setWaveformAvgRms,
-    setTranscriptionText: () => {},
-    setLayoutMode: () => {},
+    setTranscriptionText: noopSetText,
+    setLayoutMode: noopSetLayout,
     setRetryVisible,
     copyToClipboard,
     textareaRef,
@@ -167,12 +170,8 @@ export default function UIRoot() {
     if (!ctx) return;
 
     let raf = 0;
-    let lastTs = 0;
-    let angle = 0; // radians
 
-    const draw = (ts: number) => {
-      const dt = clamp((ts - lastTs) / 1000, 0, 1 / 15);
-      lastTs = ts;
+    const draw = (_ts: number) => {
 
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
@@ -275,28 +274,7 @@ export default function UIRoot() {
         ctx.stroke();
         ctx.restore();
       } else if (status === "processing") {
-        const cx = w / 2;
-        const cy = h / 2;
-        const radius = 8;
-
-        const sector = (Math.PI * 2) / 3;
-        const p = (angle % sector) / sector;
-        const half = p < 0.5 ? p / 0.5 : (1 - p) / 0.5;
-        const eased = half * half;
-        const base = 0.35;
-        const stepSpeed = 2.4;
-        angle += (base + stepSpeed * eased) * dt * sector;
-
-        const N = 3;
-        for (let i = 0; i < N; i++) {
-          const a = angle + (i * 2 * Math.PI) / N;
-          const x = cx + radius * Math.cos(a);
-          const y = cy + radius * Math.sin(a);
-          ctx.beginPath();
-          ctx.fillStyle = "rgba(15, 23, 42, 0.5)";
-          ctx.arc(x, y, 4, 0, Math.PI * 2);
-          ctx.fill();
-        }
+        // animated image is rendered as an HTML overlay
       } else {
         const cx = w / 2;
         const cy = h / 2;
@@ -309,15 +287,13 @@ export default function UIRoot() {
       raf = requestAnimationFrame(draw);
     };
 
-    raf = requestAnimationFrame((t) => {
-      lastTs = t;
-      raf = requestAnimationFrame(draw);
-    });
+    draw(performance.now());
     return () => cancelAnimationFrame(raf);
   }, [status, waveformBins, waveformAvgRms, theme]);
 
   const onRetry = useCallback(async () => {
     try {
+      setRetryVisible(false);
       await invoke<string>("retry_transcription");
     } catch (e) {
       console.error("Failed to retry transcription:", e);
@@ -389,6 +365,14 @@ export default function UIRoot() {
   return (
     <div className="uiroot">
       <canvas ref={canvasRef} className="uiroot-canvas" />
+
+      {status === "processing" && (
+        <img
+          src="/spingle-emote-animated.webp"
+          alt="Processing"
+          className="processing-emote"
+        />
+      )}
 
       <div className="ui-controls">
         <div className="bottom-right">

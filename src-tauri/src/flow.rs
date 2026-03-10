@@ -700,7 +700,7 @@ Ok(webm_data)
         let _ = result_sender.send(result);
     }
 
-    /// Rewrite transcribed text using GPT-5 to handle dictation issues
+    /// Rewrite transcribed text using GPT-5.4 to handle dictation issues
     /// (phonetic alphabet, punctuation, formatting commands, etc.)
     async fn rewrite_transcribed_text(&self, transcribed_text: &str) -> Result<String, AudioError> {
         let api_key = if self.api_key.trim().is_empty() {
@@ -727,7 +727,7 @@ Ok(webm_data)
         let rewrite_prompt = self.rewrite_prompt.replace("{}", transcribed_text);
 
         let request_body = serde_json::json!({
-            "model": "gpt-5",
+            "model": "gpt-5.4",
             "input": rewrite_prompt,
             "reasoning": {
                 "effort": "minimal"
@@ -736,7 +736,7 @@ Ok(webm_data)
             "service_tier": "priority"
         });
 
-        println!("Sending rewrite request to GPT-5...");
+        println!("Sending rewrite request to GPT-5.4...");
 
         let request_future = client
             .post("https://api.openai.com/v1/responses")
@@ -762,7 +762,7 @@ Ok(webm_data)
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(AudioError {
-                message: format!("GPT-5 API error {}: {}", status, error_text),
+                message: format!("GPT-5.4 API error {}: {}", status, error_text),
             });
         }
 
@@ -803,7 +803,7 @@ Ok(webm_data)
             .and_then(|content| content.first())
             .map(|content| content.text.clone())
             .unwrap_or_else(|| {
-                eprintln!("Could not extract text from GPT-5 response, using original");
+                eprintln!("Could not extract text from GPT-5.4 response, using original");
                 transcribed_text.to_string()
             });
 
